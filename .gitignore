@@ -1,5 +1,5 @@
-node_modules/
 *.log
 .env
 *.dll
 *.exe
+node_modules/
