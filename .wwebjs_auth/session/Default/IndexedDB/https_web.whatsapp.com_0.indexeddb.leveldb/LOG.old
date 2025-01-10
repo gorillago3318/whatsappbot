@@ -1,0 +1,34 @@
+2025/01/10-13:51:47.315 34ac Reusing MANIFEST C:\Users\waiki\OneDrive\Desktop\whatsapp-bot\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2025/01/10-13:51:47.336 34ac Recovering log #694
+2025/01/10-13:51:47.344 34ac Reusing old log C:\Users\waiki\OneDrive\Desktop\whatsapp-bot\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000694.log 
+2025/01/10-13:51:51.968 47fc Level-0 table #702: started
+2025/01/10-13:51:51.980 47fc Level-0 table #702: 116425 bytes OK
+2025/01/10-13:51:51.982 47fc Delete type=0 #694
+2025/01/10-13:51:51.983 47fc Manual compaction at level-0 from '\x00\x9d\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x9e\x00\x00\x00' @ 0 : 0; will stop at (end)
+2025/01/10-13:51:53.635 47fc Compacting 1@1 + 4@2 files
+2025/01/10-13:51:53.741 47fc Generated table #703@1: 86222 keys, 2235173 bytes
+2025/01/10-13:51:53.842 47fc Generated table #704@1: 83030 keys, 2309806 bytes
+2025/01/10-13:51:53.902 47fc Generated table #705@1: 29698 keys, 2196664 bytes
+2025/01/10-13:51:53.992 47fc Generated table #706@1: 64436 keys, 1912895 bytes
+2025/01/10-13:51:53.992 47fc Compacted 1@1 + 4@2 files => 8654538 bytes
+2025/01/10-13:51:53.993 47fc compacted to: files[ 0 0 4 0 0 0 0 ]
+2025/01/10-13:51:53.993 47fc Delete type=2 #696
+2025/01/10-13:51:53.994 47fc Delete type=2 #697
+2025/01/10-13:51:53.994 47fc Delete type=2 #698
+2025/01/10-13:51:53.994 47fc Delete type=2 #699
+2025/01/10-13:51:53.994 47fc Delete type=2 #702
+2025/01/10-13:53:09.529 4040 Level-0 table #708: started
+2025/01/10-13:53:09.590 4040 Level-0 table #708: 1243984 bytes OK
+2025/01/10-13:53:09.592 4040 Delete type=0 #701
+2025/01/10-13:53:10.560 432c Compacting 1@1 + 4@2 files
+2025/01/10-13:53:10.929 432c Generated table #709@1: 86126 keys, 2235015 bytes
+2025/01/10-13:53:11.267 432c Generated table #710@1: 83585 keys, 2311203 bytes
+2025/01/10-13:53:11.496 432c Generated table #711@1: 29409 keys, 2196994 bytes
+2025/01/10-13:53:11.773 432c Generated table #712@1: 68454 keys, 2042963 bytes
+2025/01/10-13:53:11.773 432c Compacted 1@1 + 4@2 files => 8786175 bytes
+2025/01/10-13:53:11.776 432c compacted to: files[ 0 0 4 0 0 0 0 ]
+2025/01/10-13:53:11.777 432c Delete type=2 #703
+2025/01/10-13:53:11.777 432c Delete type=2 #704
+2025/01/10-13:53:11.777 432c Delete type=2 #705
+2025/01/10-13:53:11.777 432c Delete type=2 #706
+2025/01/10-13:53:11.777 432c Delete type=2 #708
