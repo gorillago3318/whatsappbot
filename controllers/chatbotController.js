@@ -5,6 +5,8 @@ const { generateConvincingMessage } = require('../services/openaiService');
 const { getBankRate } = require('../services/bankRateService');
 const { validatePathAInputs, validatePathBInputs } = require('../utils/validation');
 const User = require('../models/User');
+require('dotenv').config();
+
 
 const calculateSavings = async (req, res) => {
   try {
