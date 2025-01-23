@@ -26,8 +26,8 @@ const MESSAGES = {
     zh: '*您的未偿还贷款金额是多少？*\n_例如：300000 表示 RM300,000_',
   },
   PATH_A_TENURE: {
-    en: '*What is your loan tenure in years?*\n_Example: 20 for 20 years_',
-    ms: '*Apakah tempoh pinjaman anda dalam tahun?*\n_Contoh: 20 untuk 20 tahun_',
+    en: '*What is your remaining loan tenure in years?*\n_Example: 20 for 20 years_',
+    ms: '*Apakah baki tempoh pinjaman anda dalam tahun?*\n_Contoh: 20 untuk 20 tahun_',
     zh: '*您的贷款期限是多少年？*\n_例如：20 表示 20 年_',
   },
   PATH_A_INTEREST_RATE: {

@@ -13,8 +13,11 @@ const sequelize = new Sequelize(DATABASE_URL, {
       rejectUnauthorized: false, // Accept self-signed certificates
     },
   },
-  host: '[2001:d08:d9:41b:20d1:b9b1:35f8:ddc5]', // Use your IPv6 address here
-  logging: false,
+  logging: false, // Disable SQL logging for cleaner logs
 });
+
+sequelize.authenticate()
+  .then(() => console.log('✅ Database connected successfully.'))
+  .catch(err => console.error('❌ Unable to connect to the database:', err));
 
 module.exports = sequelize;

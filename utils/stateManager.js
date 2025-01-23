@@ -2,6 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
+const { PORTAL_API_URL } = require('../config/dotenvConfig');
+
 
 // Constants, Messages, Translations
 const { STATES } = require('../config/constants');
@@ -39,18 +42,23 @@ function extractPhoneNumber(chatId) {
 // ────────────────────────────────────────────────────────────────────────────────
 let userStates = {};
 
-// ────────────────────────────────────────────────────────────────────────────────
-// Initialize user state and store phone number
-// ────────────────────────────────────────────────────────────────────────────────
-function initializeUserState(chatId) {
+function extractReferralCode(queryString) {
+  const params = new URLSearchParams(queryString);
+  return params.get('ref') || null;
+}
+
+// Initialize user state with referral_code
+function initializeUserState(chatId, queryString) {
   const phoneNumber = extractPhoneNumber(chatId);
-  console.log(`[DEBUG] initializeUserState: chatId=${chatId}, extracted phoneNumber=${phoneNumber}`);
+  const referralCode = extractReferralCode(queryString);
+  console.log(`[DEBUG] initializeUserState: chatId=${chatId}, referralCode=${referralCode}`);
 
   if (!userStates[chatId]) {
     userStates[chatId] = {
       state: STATES.GET_STARTED,
       data: {
-        phoneNumber, // store phone
+        phoneNumber,
+        referral_code: referralCode, // Track referral_code
       },
       language: 'en',
     };
@@ -78,13 +86,13 @@ function formatCurrency(value) {
 // ────────────────────────────────────────────────────────────────────────────────
 async function saveUserData(userState, chatId) {
   const phoneNumber = userState.data.phoneNumber || extractPhoneNumber(chatId);
-  console.log(`[DEBUG] saveUserData: Using phoneNumber=${phoneNumber}`);
 
   try {
     await User.upsert({
       messengerId: chatId,
       name: userState.data.name || null,
       phoneNumber: phoneNumber || null,
+      referral_code: userState.data.referral_code || null, // Save referral_code
       loanAmount: userState.data.loanAmount || null,
       tenure: userState.data.tenure || null,
       interestRate: userState.data.interestRate || null,
@@ -100,9 +108,13 @@ async function saveUserData(userState, chatId) {
       outstandingBalance: userState.data.outstandingBalance || null,
       lastInteraction: new Date(),
     });
+
     console.log('[DEBUG] User data saved successfully.');
+
+    // Send data to portal after saving
+    await sendLeadToPortal(userState);
   } catch (error) {
-    console.error(`[DEBUG] Failed to save user data: ${error.message}`);
+    console.error('[ERROR] Failed to save user data:', error.message);
   }
 }
 
@@ -348,16 +360,21 @@ Please hold on while we analyze if refinancing benefits you.
             userState.language
           );
           await client.sendMessage(chatId, convincingMessageA);
-
+        
           console.log('[DEBUG] About to notify admin for Path A lead...');
           console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', userState.data);
-
+        
           await client.sendMessage(
             chatId,
-            'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart"'
+            'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
           );
-          // Pass `chatId` so we can re-fetch phone if missing
+        
+          // Notify Admin
           await sendLeadSummaryToAdmin(userState, client, chatId);
+        
+          // Send lead data to the portal
+          await sendLeadToPortal(userState);
+        
           userState.state = STATES.COMPLETE;
         } catch (error) {
           console.error('[DEBUG] Error generating convincing message for Path A:', error.message);
@@ -365,14 +382,15 @@ Please hold on while we analyze if refinancing benefits you.
             chatId,
             'An error occurred while generating the convincing message. Please contact support.'
           );
-          await client.sendMessage(
-            chatId,
-            'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart"'
-          );
-
+        
           console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin (Path A Error):', userState.data);
-
+        
+          // Notify Admin
           await sendLeadSummaryToAdmin(userState, client, chatId);
+        
+          // Send lead data to the portal
+          await sendLeadToPortal(userState);
+        
           userState.state = STATES.COMPLETE;
         }
         break;
@@ -500,16 +518,21 @@ ${summaryTranslationB.analysis}
               userState.language
             );
             await client.sendMessage(chatId, convincingMessageB);
-
+          
             console.log('[DEBUG] About to notify admin for Path B lead...');
             console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', userState.data);
-
+          
+            // Notify Admin
             await sendLeadSummaryToAdmin(userState, client, chatId);
-
+          
+            // Send lead data to the portal
+            await sendLeadToPortal(userState);
+          
             await client.sendMessage(
               chatId,
-              'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart"'
+              'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
             );
+          
             userState.state = STATES.COMPLETE;
           } catch (error) {
             console.error('[DEBUG] Error generating convincing message for Path B:', error.message);
@@ -517,15 +540,20 @@ ${summaryTranslationB.analysis}
               chatId,
               'An error occurred while generating the convincing message. Please contact support.'
             );
-
+          
             console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin (Path B Error):', userState.data);
-
+          
+            // Notify Admin
             await sendLeadSummaryToAdmin(userState, client, chatId);
-
+          
+            // Send lead data to the portal
+            await sendLeadToPortal(userState);
+          
             await client.sendMessage(
               chatId,
-              'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart"'
+              'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
             );
+          
             userState.state = STATES.COMPLETE;
           }
         } catch (error) {
@@ -575,9 +603,38 @@ ${summaryTranslationB.analysis}
   }
 }
 
+async function sendLeadToPortal(userState) {
+  const leadData = {
+    referrer_code: userState.data.referral_code || 'N/A',
+    phone: userState.data.phoneNumber || 'N/A',
+    loan_amount: userState.data.loanAmount || userState.data.originalLoanAmount || 0,
+    estimated_savings: userState.data.lifetimeSavings || 0,
+  };
+
+  console.log('[DEBUG] Sending lead data to portal:', leadData);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await axios.post(PORTAL_API_URL, leadData, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      console.log('[DEBUG] Lead sent to portal successfully:', response.data);
+      return; // Exit after successful send
+    } catch (error) {
+      console.error(`[ERROR] Failed to send lead to portal (Attempt ${attempt}):`, error.message);
+      if (attempt === 3) {
+        console.error('[ERROR] Giving up after 3 attempts.');
+      }
+    }
+  }
+}
+
 // Export everything
 module.exports = {
   initializeUserState,
   handleState,
   sendLeadSummaryToAdmin,
+  sendLeadToPortal,
 };

@@ -17,6 +17,10 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING,
     allowNull: true,
   },
+  referral_code: {
+    type: DataTypes.STRING,
+    allowNull: true, // Optional
+  },
   originalLoanAmount: {
     type: DataTypes.FLOAT,
     allowNull: true,

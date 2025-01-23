@@ -1,2 +1,3 @@
-2025/01/09-10:00:34.333 4030 Creating DB C:\Users\waiki\OneDrive\Desktop\whatsapp-bot\.wwebjs_auth\session\Default\shared_proto_db since it was missing.
-2025/01/09-10:00:34.339 4030 Reusing MANIFEST C:\Users\waiki\OneDrive\Desktop\whatsapp-bot\.wwebjs_auth\session\Default\shared_proto_db/MANIFEST-000001
+2025/01/10-10:09:39.890 2694 Reusing MANIFEST C:\Users\waiki\OneDrive\Desktop\whatsapp-bot\.wwebjs_auth\session\Default\shared_proto_db/MANIFEST-000001
+2025/01/10-10:09:39.899 2694 Recovering log #3
+2025/01/10-10:09:39.900 2694 Reusing old log C:\Users\waiki\OneDrive\Desktop\whatsapp-bot\.wwebjs_auth\session\Default\shared_proto_db/000003.log 
