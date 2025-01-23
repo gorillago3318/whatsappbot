@@ -11,14 +11,14 @@ const { TEMP_REFERRAL_API_URL } = process.env; // Ensure this is in your .env fi
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
-    executablePath: '/usr/bin/chromium-browser',
+    executablePath: '/usr/bin/chromium-browser', // Path to the system-installed Chromium
     args: [
-      '--no-sandbox', 
-      '--disable-setuid-sandbox', 
-      '--disable-dev-shm-usage', 
-      '--disable-extensions', 
-      '--disable-gpu', 
-      '--no-zygote', 
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-extensions',
+      '--disable-gpu',
+      '--no-zygote',
       '--single-process',
     ],
     handleSIGINT: false,
