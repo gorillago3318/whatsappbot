@@ -1,4 +1,4 @@
-const axios = require('axios'); // Import Axios for HTTP requests
+const axios = require('axios');
 const logger = require('../config/logger');
 const { calculateRefinanceSavings } = require('../utils/calculation');
 const { generateConvincingMessage } = require('../services/openaiService');
@@ -9,7 +9,7 @@ require('dotenv').config();
 
 const calculateSavings = async (req, res) => {
   try {
-    logger.info(`[DEBUG] Incoming Request Body: ${JSON.stringify(req.body)}`); // Log full request body
+    logger.info(`[DEBUG] Incoming Request Body: ${JSON.stringify(req.body)}`);
 
     const {
       messengerId,
@@ -22,8 +22,8 @@ const calculateSavings = async (req, res) => {
       originalTenure,
       monthlyPayment,
       yearsPaid,
-      language = 'en', // Default language
-      referrerCode, // Add referrerCode if available
+      language = 'en',
+      referrerCode,
     } = req.body;
 
     logger.debug(`[DEBUG] Parsed Input Data: messengerId=${messengerId}, name=${name}, phoneNumber=${phoneNumber}, referrerCode=${referrerCode}`);
@@ -32,13 +32,11 @@ const calculateSavings = async (req, res) => {
     let path = '';
     let validationResult;
     if (loanAmount && tenure && repayment) {
-      path = 'A'; // Path A
+      path = 'A';
       validationResult = validatePathAInputs({ loanAmount, tenure, interestRate: repayment }, language);
-      logger.debug(`[DEBUG] Path A Validation Result: ${JSON.stringify(validationResult)}`);
     } else if (originalLoanAmount && originalTenure && monthlyPayment && yearsPaid) {
-      path = 'B'; // Path B
+      path = 'B';
       validationResult = validatePathBInputs({ originalLoanAmount, originalTenure, monthlyPayment, yearsPaid }, language);
-      logger.debug(`[DEBUG] Path B Validation Result: ${JSON.stringify(validationResult)}`);
     } else {
       logger.error(`[ERROR] Missing required fields for Path A or Path B.`);
       return res.status(400).json({ error: 'Missing required fields for Path A or Path B.' });
@@ -52,22 +50,16 @@ const calculateSavings = async (req, res) => {
     // Perform calculations based on the path
     let result;
     if (path === 'A') {
-      logger.debug(`[DEBUG] Performing calculations for Path A`);
       const bankrate = await getBankRate(loanAmount);
       result = calculateRefinanceSavings(loanAmount, tenure, repayment, [bankrate]);
     } else if (path === 'B') {
-      logger.debug(`[DEBUG] Performing calculations for Path B`);
       const bankrate = await getBankRate(originalLoanAmount);
       result = calculateRefinanceSavings(originalLoanAmount, originalTenure, monthlyPayment, [bankrate]);
     }
 
-    logger.info(`[DEBUG] Calculation Result: ${JSON.stringify(result)}`);
-
     // Save or Update User in Database
-    logger.debug(`[DEBUG] Checking if user exists in database: messengerId=${messengerId}`);
     let user = await User.findOne({ where: { messengerId } });
     if (user) {
-      logger.debug(`[DEBUG] User found, updating user data`);
       await user.update({
         name,
         phoneNumber,
@@ -77,10 +69,9 @@ const calculateSavings = async (req, res) => {
         monthlySavings: result.monthlySavings,
         yearlySavings: result.yearlySavings,
         lifetimeSavings: result.lifetimeSavings,
-        referral_code: referrerCode || user.referral_code, // Update referral code if available
+        referral_code: referrerCode || user.referral_code,
       });
     } else {
-      logger.debug(`[DEBUG] User not found, creating new user`);
       user = await User.create({
         messengerId,
         name,
@@ -91,43 +82,37 @@ const calculateSavings = async (req, res) => {
         monthlySavings: result.monthlySavings,
         yearlySavings: result.yearlySavings,
         lifetimeSavings: result.lifetimeSavings,
-        referral_code: referrerCode || null, // Save referral code if available
+        referral_code: referrerCode || null,
       });
     }
 
-    logger.info(`[DEBUG] User data saved/updated successfully: ${JSON.stringify(user.toJSON())}`);
-
-    // Send Lead Data to the /api/leads Endpoint
+    // Enhanced Lead Submission with Comprehensive Debugging
     try {
       const backendUrl = process.env.BACKEND_URL || 'http://qaichatbot.chat/api/leads';
       
-      // Detailed logging of environment and configuration
       console.log('Backend URL Configuration:', {
         envBackendUrl: process.env.BACKEND_URL,
         fallbackUrl: 'http://qaichatbot.chat/api/leads'
       });
-    
-      // Ensure lead data matches exact backend expectations
+
       const leadData = {
         name: name || user.name,
         phone: phoneNumber || user.phoneNumber,
         referrer_code: referrerCode || user.referral_code || null,
         loan_amount: path === 'A' ? loanAmount : originalLoanAmount
       };
-    
-      // Validate lead data before sending
+
       console.log('Prepared Lead Data:', JSON.stringify(leadData, null, 2));
       
-      // Axios configuration with detailed error handling
       const axiosConfig = {
         headers: {
           'Content-Type': 'application/json'
         },
         timeout: 10000 // 10-second timeout
       };
-    
+
       console.log('Axios Configuration:', axiosConfig);
-    
+
       try {
         const response = await axios.post(backendUrl, leadData, axiosConfig);
         console.log('Backend Response:', {
@@ -146,13 +131,33 @@ const calculateSavings = async (req, res) => {
           request: error.request ? 'Request was made' : 'No request made',
           config: error.config
         });
-    
-        // Rethrow to maintain original error handling
         throw error;
       }
     } catch (error) {
       logger.error(`[CRITICAL] Lead Submission Failed: ${error.message}`);
-      // Consider additional error handling or notification mechanism
     }
+
+    // Generate convincing message
+    let convincingMessage;
+    try {
+      convincingMessage = await generateConvincingMessage(result);
+    } catch (error) {
+      convincingMessage = 'Refinancing could help you save significantly. Contact us for more details!';
+    }
+
+    const response = {
+      success: true,
+      data: {
+        savingsSummary: result,
+        convincingMessage,
+      },
+    };
+
+    res.json(response);
+  } catch (err) {
+    logger.error(`[ERROR] Internal Server Error: ${err.message}`);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
 
 module.exports = { calculateSavings };
