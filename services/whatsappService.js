@@ -108,6 +108,7 @@ client.on('message', async (msg) => {
 
 // Initialize WhatsApp Client
 const initializeWhatsApp = async () => {
+  console.log('initializeWhatsApp function called'); // Debug log
   try {
     logger.info('Initializing WhatsApp client...');
     await client.initialize();

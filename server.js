@@ -3,7 +3,7 @@ const dotenvConfig = require('./config/dotenvConfig');
 const sequelize = require('./config/dbConfig');
 const logger = require('./config/logger');
 const chatbotRoutes = require('./routes/chatbotRoutes'); // Chatbot-specific routes
-const { initializeWhatsApp } = require('./services/whatsappService');
+const { initializeWhatsApp, handleShutdown } = require('./services/whatsappService');
 
 const app = express();
 app.use(express.json());
@@ -12,10 +12,9 @@ const PORT = dotenvConfig.PORT || 3000;
 
 require('dotenv').config(); // Default behavior loads `.env` in the current working directory
 
-// Validate required environment variables
+// Validate required environment variables (remove if not necessary)
 if (!dotenvConfig.TEMP_REFERRAL_API_URL) {
-  logger.error('❌ TEMP_REFERRAL_API_URL is not set in the environment variables.');
-  process.exit(1);
+  logger.warn('⚠️ TEMP_REFERRAL_API_URL is not set. Ensure this is intentional.');
 }
 
 // Database connection check
@@ -33,7 +32,11 @@ sequelize.sync({ alter: true }) // Use alter for syncing schema without dropping
   });
 
 // Initialize WhatsApp Client
-initializeWhatsApp();
+try {
+  initializeWhatsApp();
+} catch (err) {
+  logger.error(`❌ Error initializing WhatsApp client: ${err.message}`);
+}
 
 // Test Route
 app.get('/', (req, res) => {
@@ -57,6 +60,10 @@ app.get('/health', async (req, res) => {
 
 // Chatbot Routes
 app.use('/chatbot', chatbotRoutes); // Only chatbot routes are used
+
+// Graceful Shutdown
+process.on('SIGTERM', handleShutdown);
+process.on('SIGINT', handleShutdown);
 
 // Start Server
 app.listen(PORT, () => {
