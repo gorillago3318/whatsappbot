@@ -1,3 +1,4 @@
+const axios = require('axios'); // Import Axios for HTTP requests
 const logger = require('../config/logger');
 const { calculateRefinanceSavings } = require('../utils/calculation');
 const { generateConvincingMessage } = require('../services/openaiService');
@@ -21,6 +22,7 @@ const calculateSavings = async (req, res) => {
       monthlyPayment,
       yearsPaid,
       language = 'en', // Default language
+      referrerCode, // Add referrerCode if available
     } = req.body;
 
     // Determine the path and validate inputs
@@ -62,6 +64,7 @@ const calculateSavings = async (req, res) => {
         monthlySavings: result.monthlySavings,
         yearlySavings: result.yearlySavings,
         lifetimeSavings: result.lifetimeSavings,
+        referral_code: referrerCode || user.referral_code, // Update referral code if available
       });
     } else {
       user = await User.create({
@@ -74,7 +77,24 @@ const calculateSavings = async (req, res) => {
         monthlySavings: result.monthlySavings,
         yearlySavings: result.yearlySavings,
         lifetimeSavings: result.lifetimeSavings,
+        referral_code: referrerCode || null, // Save referral code if available
       });
+    }
+
+    // Send Lead Data to the /api/leads Endpoint
+    try {
+      const backendUrl = process.env.BACKEND_URL || 'http://qaichatbot.chat/api/leads'; // Backend endpoint for leads
+      const leadData = {
+        name: user.name,
+        phone: user.phoneNumber,
+        referrer_code: user.referral_code,
+        loan_amount: path === 'A' ? loanAmount : originalLoanAmount,
+      };
+
+      const response = await axios.post(backendUrl, leadData);
+      logger.info(`[INFO] Lead sent to backend: ${JSON.stringify(response.data)}`);
+    } catch (error) {
+      logger.error(`[ERROR] Failed to send lead to backend: ${error.message}`);
     }
 
     // Generate a convincing message using GPT-4
