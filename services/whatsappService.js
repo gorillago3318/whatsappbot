@@ -28,7 +28,8 @@ const client = new Client({
 // QR Code Event
 client.on('qr', (qr) => {
   logger.info('QR Code received. Scan it with your WhatsApp app.');
-  qrcode.generate(qr, { small: true });
+  console.log('QR Code received, displaying below:'); // Additional log for clarity
+  qrcode.generate(qr, { small: true }); // Ensure QR code appears in the terminal
 });
 
 // Ready Event
