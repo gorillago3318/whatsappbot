@@ -2,14 +2,15 @@ const express = require('express');
 const dotenvConfig = require('./config/dotenvConfig');
 const sequelize = require('./config/dbConfig');
 const logger = require('./config/logger');
-const chatbotRoutes = require('./routes/chatbotRoutes');
-const tempReferralRoutes = require('./routes/tempReferralRoutes'); // Import temp referral routes
+const chatbotRoutes = require('./routes/chatbotRoutes'); // Chatbot-specific routes
 const { initializeWhatsApp } = require('./services/whatsappService');
 
 const app = express();
 app.use(express.json());
 
 const PORT = dotenvConfig.PORT || 3000;
+
+require('dotenv').config(); // Default behavior loads `.env` in the current working directory
 
 // Validate required environment variables
 if (!dotenvConfig.TEMP_REFERRAL_API_URL) {
@@ -55,10 +56,7 @@ app.get('/health', async (req, res) => {
 });
 
 // Chatbot Routes
-app.use('/chatbot', chatbotRoutes);
-
-// Temporary Referral Routes
-app.use('/api/temp-referral', tempReferralRoutes);
+app.use('/chatbot', chatbotRoutes); // Only chatbot routes are used
 
 // Start Server
 app.listen(PORT, () => {
