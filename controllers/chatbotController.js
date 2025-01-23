@@ -86,55 +86,31 @@ const calculateSavings = async (req, res) => {
       });
     }
 
-    // Enhanced Lead Submission with Comprehensive Debugging
+    logger.info(`[INFO] User data saved successfully for messengerId: ${messengerId}`);
+
+    // Backend Lead Submission
     try {
       const backendUrl = process.env.BACKEND_URL || 'http://qaichatbot.chat/api/leads';
-      
-      console.log('Backend URL Configuration:', {
-        envBackendUrl: process.env.BACKEND_URL,
-        fallbackUrl: 'http://qaichatbot.chat/api/leads'
-      });
-
+    
       const leadData = {
         name: name || user.name,
         phone: phoneNumber || user.phoneNumber,
         referrer_code: referrerCode || user.referral_code || null,
-        loan_amount: path === 'A' ? loanAmount : originalLoanAmount
+        loan_amount: path === 'A' ? loanAmount : originalLoanAmount,
+        monthly_savings: result.monthlySavings,
+        yearly_savings: result.yearlySavings,
+        lifetime_savings: result.lifetimeSavings,
       };
 
-      console.log('Prepared Lead Data:', JSON.stringify(leadData, null, 2));
-      
-      const axiosConfig = {
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000 // 10-second timeout
-      };
-
-      console.log('Axios Configuration:', axiosConfig);
-
-      try {
-        const response = await axios.post(backendUrl, leadData, axiosConfig);
-        console.log('Backend Response:', {
-          status: response.status,
-          data: response.data
-        });
-      } catch (error) {
-        console.error('Detailed Axios Error:', {
-          message: error.message,
-          code: error.code,
-          response: error.response ? {
-            status: error.response.status,
-            data: error.response.data,
-            headers: error.response.headers
-          } : 'No response received',
-          request: error.request ? 'Request was made' : 'No request made',
-          config: error.config
-        });
-        throw error;
-      }
+      logger.debug(`[DEBUG] Lead Data: ${JSON.stringify(leadData)}`);
+    
+      const response = await axios.post(backendUrl, leadData, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    
+      logger.info(`[INFO] Lead submitted successfully: ${response.status}`);
     } catch (error) {
-      logger.error(`[CRITICAL] Lead Submission Failed: ${error.message}`);
+      logger.error(`[ERROR] Failed to submit lead: ${error.message}`);
     }
 
     // Generate convincing message

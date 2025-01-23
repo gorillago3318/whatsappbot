@@ -2,45 +2,30 @@ const express = require('express');
 const dotenvConfig = require('./config/dotenvConfig');
 const sequelize = require('./config/dbConfig');
 const logger = require('./config/logger');
-const chatbotRoutes = require('./routes/chatbotRoutes'); // Chatbot-specific routes
+const chatbotRoutes = require('./routes/chatbotRoutes');
 const { initializeWhatsApp, handleShutdown } = require('./services/whatsappService');
+
+// Validate Environment Variables
+const validateEnvVars = () => {
+  const requiredVars = ['DATABASE_URL', 'PORT'];
+  const missingVars = requiredVars.filter((varName) => !process.env[varName]);
+
+  if (missingVars.length > 0) {
+    logger.error(`❌ Missing required environment variables: ${missingVars.join(', ')}`);
+    process.exit(1);
+  }
+};
+validateEnvVars();
 
 const app = express();
 app.use(express.json());
 
 const PORT = dotenvConfig.PORT || 3000;
 
-require('dotenv').config(); // Default behavior loads `.env` in the current working directory
-
-// Validate required environment variables (remove if not necessary)
-if (!dotenvConfig.TEMP_REFERRAL_API_URL) {
-  logger.warn('⚠️ TEMP_REFERRAL_API_URL is not set. Ensure this is intentional.');
-}
-
-// Database connection check
-sequelize.authenticate()
-  .then(() => logger.info('✅ Database connected successfully.'))
-  .catch((err) => logger.error(`❌ Database connection failed: ${err.message}`));
-
-// Sync Database
-sequelize.sync({ alter: true }) // Use alter for syncing schema without dropping data
-  .then(() => {
-    logger.info('✅ Database schema synced successfully.');
-  })
-  .catch((err) => {
-    logger.error(`❌ Error syncing database: ${err.message}`);
-  });
-
-// Initialize WhatsApp Client
-try {
-  initializeWhatsApp();
-} catch (err) {
-  logger.error(`❌ Error initializing WhatsApp client: ${err.message}`);
-}
-
-// Test Route
-app.get('/', (req, res) => {
-  res.send('Server and WhatsApp Bot are running!');
+// Log all incoming requests
+app.use((req, res, next) => {
+  logger.info(`[REQUEST] ${req.method} ${req.originalUrl}`);
+  next();
 });
 
 // Health Check Route
@@ -59,7 +44,39 @@ app.get('/health', async (req, res) => {
 });
 
 // Chatbot Routes
-app.use('/chatbot', chatbotRoutes); // Only chatbot routes are used
+app.use('/chatbot', chatbotRoutes);
+
+// 404 Handler for Undefined Routes
+app.use((req, res) => {
+  logger.warn(`[404] Route not found: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// Global Error Handling
+app.use((err, req, res, next) => {
+  logger.error(`[ERROR] ${err.message}`);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    details: process.env.NODE_ENV === 'production' ? undefined : err.stack,
+  });
+});
+
+// Database Connection
+sequelize.authenticate()
+  .then(() => logger.info('✅ Database connected successfully.'))
+  .catch((err) => logger.error(`❌ Database connection failed: ${err.message}`));
+
+// Sync Database
+sequelize.sync({ alter: true })
+  .then(() => logger.info('✅ Database schema synced successfully.'))
+  .catch((err) => logger.error(`❌ Error syncing database: ${err.message}`));
+
+// Initialize WhatsApp Client
+try {
+  initializeWhatsApp();
+} catch (err) {
+  logger.error(`❌ Error initializing WhatsApp client: ${err.message}`);
+}
 
 // Graceful Shutdown
 process.on('SIGTERM', handleShutdown);
