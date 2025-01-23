@@ -1,14 +1,17 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const logger = require('../config/logger');
-const qrcode = require('qrcode-terminal'); // Import qrcode-terminal for QR display
+const qrcode = require('qrcode-terminal');
+const axios = require('axios'); // For referral token validation
 const { handleState, initializeUserState } = require('../utils/stateManager');
 const { STATES } = require('../config/constants');
 
-// Initialize WhatsApp Client with system-installed Chromium
+const { TEMP_REFERRAL_API_URL } = process.env; // Ensure this is in your .env file
+
+// Initialize WhatsApp Client
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
-    executablePath: '/usr/bin/chromium-browser', // Path to the system-installed Chromium
+    executablePath: '/usr/bin/chromium-browser',
     args: [
       '--no-sandbox', 
       '--disable-setuid-sandbox', 
@@ -16,16 +19,16 @@ const client = new Client({
       '--disable-extensions', 
       '--disable-gpu', 
       '--no-zygote', 
-      '--single-process' // Recommended for some environments
+      '--single-process',
     ],
-    handleSIGINT: false, // Prevent Puppeteer from registering its own SIGINT handler
-  }
+    handleSIGINT: false,
+  },
 });
 
 // QR Code Event
 client.on('qr', (qr) => {
   logger.info('QR Code received. Scan it with your WhatsApp app.');
-  qrcode.generate(qr, { small: true }); // Display QR code in the terminal
+  qrcode.generate(qr, { small: true });
 });
 
 // Ready Event
@@ -41,8 +44,7 @@ client.on('auth_failure', (msg) => {
 // Disconnected Event
 client.on('disconnected', (reason) => {
   logger.warn('WhatsApp client disconnected:', reason);
-  // Attempt to reconnect
-  logger.info('Reinitializing WhatsApp client after disconnect...');
+  logger.info('Reinitializing WhatsApp client...');
   client.initialize().catch(err => {
     logger.error('Failed to reinitialize after disconnect:', err);
   });
@@ -53,25 +55,42 @@ client.on('message', async (msg) => {
   const chatId = msg.from;
   const message = msg.body.trim();
 
-  // Log incoming message with masked phone number for privacy
   const maskedChatId = chatId.replace(/(\d{4})$/, '**');
   logger.info(`Message received from ${maskedChatId}: ${message}`);
 
   try {
     const userState = initializeUserState(chatId);
 
+    // Handle referral token validation
+    if (message.startsWith('ref:')) {
+      const token = message.replace('ref:', '').trim();
+      logger.info(`[DEBUG] Referral token detected: ${token}`);
+
+      try {
+        const response = await axios.get(`${TEMP_REFERRAL_API_URL}/validate/${token}`);
+        const referralCode = response.data.referral_code;
+
+        logger.info(`[DEBUG] Referral token valid. Referral code: ${referralCode}`);
+        userState.data.referral_code = referralCode;
+
+        await client.sendMessage(chatId, `Referral code ${referralCode} has been linked to your profile.`);
+      } catch (error) {
+        logger.error(`[ERROR] Failed to validate referral token: ${error.message}`);
+        await client.sendMessage(chatId, 'Invalid or expired referral token. Please try again.');
+        return;
+      }
+    }
+
     // Handle restart command
     if (message.toLowerCase() === 'restart') {
       userState.state = STATES.GET_STARTED;
       userState.data = {};
       logger.info(`User state reset for ${maskedChatId}`);
-      // Remove welcome message here to avoid double prompting
       return await handleState(userState, chatId, message, client);
     }
 
-    // Handle the user's current state
+    // Handle user state
     await handleState(userState, chatId, message, client);
-
   } catch (err) {
     logger.error(`Error processing message from ${maskedChatId}:`, {
       error: err.message,
@@ -79,7 +98,6 @@ client.on('message', async (msg) => {
       state: userState?.state,
     });
 
-    // Send user-friendly error message
     const errorMessage = 'Sorry, something went wrong. Please type "restart" to start over.';
     await client.sendMessage(chatId, errorMessage).catch(sendErr => {
       logger.error(`Failed to send error message to ${maskedChatId}:`, sendErr);
@@ -87,23 +105,23 @@ client.on('message', async (msg) => {
   }
 });
 
-// Initialize WhatsApp Client with error handling
+// Initialize WhatsApp Client
 const initializeWhatsApp = async () => {
   try {
     logger.info('Initializing WhatsApp client...');
     await client.initialize();
   } catch (err) {
     logger.error('Failed to initialize WhatsApp client:', err);
-    throw err; // Re-throw to be handled by the calling code
+    throw err;
   }
 };
 
-// Graceful shutdown handler
+// Graceful Shutdown
 const handleShutdown = async () => {
   logger.info('Shutting down WhatsApp client...');
   try {
     await client.destroy();
-    logger.info('WhatsApp client shut down successfully');
+    logger.info('WhatsApp client shut down successfully.');
     process.exit(0);
   } catch (err) {
     logger.error('Error during shutdown:', err);
@@ -111,11 +129,10 @@ const handleShutdown = async () => {
   }
 };
 
-// Register shutdown handlers
 process.on('SIGTERM', handleShutdown);
 process.on('SIGINT', handleShutdown);
 
 module.exports = { 
   initializeWhatsApp,
-  handleShutdown // Export for testing purposes
+  handleShutdown,
 };
