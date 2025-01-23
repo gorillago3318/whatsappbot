@@ -92,7 +92,7 @@ async function saveUserData(userState, chatId) {
       messengerId: chatId,
       name: userState.data.name || null,
       phoneNumber: phoneNumber || null,
-      referral_code: userState.data.referral_code || null, // Save referral_code
+      referral_code: userState.data.referral_code || null,
       loanAmount: userState.data.loanAmount || null,
       tenure: userState.data.tenure || null,
       interestRate: userState.data.interestRate || null,
@@ -110,9 +110,6 @@ async function saveUserData(userState, chatId) {
     });
 
     console.log('[DEBUG] User data saved successfully.');
-
-    // Send data to portal after saving
-    await sendLeadToPortal(userState);
   } catch (error) {
     console.error('[ERROR] Failed to save user data:', error.message);
   }
@@ -569,24 +566,24 @@ ${summaryTranslationB.analysis}
       // ------------------ COMPLETE ------------------
       case STATES.COMPLETE: {
         console.log('[DEBUG] In COMPLETE state. userState:', userState);
-        if (message.toLowerCase() === 'restart') {
-          console.log('[DEBUG] Restarting conversation, preserving phone only...');
-          const savedPhone = userState.data.phoneNumber; // keep phone number only
-
-          userState.state = STATES.GET_STARTED;
-          userState.data = {
-            phoneNumber: savedPhone,
-          };
-
-          await client.sendMessage(chatId, MESSAGES.WELCOME['en']);
-        } else {
+      
+        try {
+          // Send lead data to the portal only after the conversation is complete
+          console.log('[DEBUG] Sending final lead data to portal...');
+          await sendLeadToPortal(userState);
+      
           await client.sendMessage(
             chatId,
-            'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart"'
+            'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
           );
+      
+          userState.state = STATES.DONE;
+        } catch (error) {
+          console.error('[ERROR] Failed to send lead to portal in COMPLETE state:', error.message);
         }
         break;
       }
+     
 
       // ------------------ DEFAULT ------------------
       default: {
@@ -611,6 +608,11 @@ async function sendLeadToPortal(userState) {
     estimated_savings: userState.data.lifetimeSavings || 0,
   };
 
+  if (!leadData.phone || !leadData.loan_amount) {
+    console.error('[ERROR] Missing required lead data. Not sending to portal:', leadData);
+    return;
+  }
+
   console.log('[DEBUG] Sending lead data to portal:', leadData);
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -630,6 +632,7 @@ async function sendLeadToPortal(userState) {
     }
   }
 }
+
 
 // Export everything
 module.exports = {
