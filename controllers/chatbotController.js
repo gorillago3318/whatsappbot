@@ -99,49 +99,60 @@ const calculateSavings = async (req, res) => {
 
     // Send Lead Data to the /api/leads Endpoint
     try {
-      const backendUrl = process.env.BACKEND_URL || 'http://qaichatbot.chat/api/leads'; // Backend endpoint for leads
+      const backendUrl = process.env.BACKEND_URL || 'http://qaichatbot.chat/api/leads';
+      
+      // Detailed logging of environment and configuration
+      console.log('Backend URL Configuration:', {
+        envBackendUrl: process.env.BACKEND_URL,
+        fallbackUrl: 'http://qaichatbot.chat/api/leads'
+      });
+    
+      // Ensure lead data matches exact backend expectations
       const leadData = {
-        name: user.name,
-        phone: user.phoneNumber,
-        referrer_code: user.referral_code,
-        loan_amount: path === 'A' ? loanAmount : originalLoanAmount,
+        name: name || user.name,
+        phone: phoneNumber || user.phoneNumber,
+        referrer_code: referrerCode || user.referral_code || null,
+        loan_amount: path === 'A' ? loanAmount : originalLoanAmount
       };
-
-      logger.debug(`[DEBUG] Sending lead data to backend: ${JSON.stringify(leadData)} via ${backendUrl}`);
-      const response = await axios.post(backendUrl, leadData);
-      logger.info(`[INFO] Lead sent to backend successfully: ${JSON.stringify(response.data)}`);
+    
+      // Validate lead data before sending
+      console.log('Prepared Lead Data:', JSON.stringify(leadData, null, 2));
+      
+      // Axios configuration with detailed error handling
+      const axiosConfig = {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000 // 10-second timeout
+      };
+    
+      console.log('Axios Configuration:', axiosConfig);
+    
+      try {
+        const response = await axios.post(backendUrl, leadData, axiosConfig);
+        console.log('Backend Response:', {
+          status: response.status,
+          data: response.data
+        });
+      } catch (error) {
+        console.error('Detailed Axios Error:', {
+          message: error.message,
+          code: error.code,
+          response: error.response ? {
+            status: error.response.status,
+            data: error.response.data,
+            headers: error.response.headers
+          } : 'No response received',
+          request: error.request ? 'Request was made' : 'No request made',
+          config: error.config
+        });
+    
+        // Rethrow to maintain original error handling
+        throw error;
+      }
     } catch (error) {
-      logger.error(`[ERROR] Failed to send lead to backend: ${error.message}`);
+      logger.error(`[CRITICAL] Lead Submission Failed: ${error.message}`);
+      // Consider additional error handling or notification mechanism
     }
-
-    // Generate a convincing message using GPT-4
-    let convincingMessage;
-    try {
-      logger.debug(`[DEBUG] Generating convincing message`);
-      convincingMessage = await generateConvincingMessage(result);
-    } catch (error) {
-      logger.error(`[ERROR] GPT-4 Error: ${error.message}`);
-      convincingMessage = 'Refinancing could help you save significantly. Contact us for more details!';
-    }
-
-    // Respond to the user with the summary and convincing message
-    const response = {
-      success: true,
-      data: {
-        savingsSummary: result,
-        convincingMessage,
-      },
-    };
-
-    logger.info(`[DEBUG] Final Response to User: ${JSON.stringify(response)}`);
-    res.json(response);
-
-    // Notify Admin (placeholder for actual notification logic)
-    logger.info(`[DEBUG] Admin notified of new lead: ${JSON.stringify(user)}`);
-  } catch (err) {
-    logger.error(`[ERROR] Internal Server Error: ${err.message}`);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-};
 
 module.exports = { calculateSavings };
