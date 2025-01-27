@@ -5,7 +5,6 @@ const path = require('path');
 const axios = require('axios');
 const { PORTAL_API_URL } = require('../config/dotenvConfig');
 
-
 // Constants, Messages, Translations
 const { STATES } = require('../config/constants');
 const { MESSAGES, SUMMARY_TRANSLATIONS } = require('../config/translations');
@@ -25,10 +24,6 @@ const {
 const { generateConvincingMessage } = require('../services/openaiService');
 // Database Model
 const User = require('../models/User');
-
-// If you have a custom logger, import it; otherwise, use console
-// const logger = require('../config/logger'); 
-// We'll just use `console` for debugging.
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Helper to extract phone number from chatId
@@ -144,7 +139,7 @@ async function ensurePhoneNumber(userState, chatId) {
 // ────────────────────────────────────────────────────────────────────────────────
 // sendLeadSummaryToAdmin with DB fallback for phone
 // ────────────────────────────────────────────────────────────────────────────────
-async function sendLeadSummaryToAdmin(userState, client, chatId) {
+async function sendLeadSummaryToAdmin(userState, client, chatId, sendMessage) {
   // 1) Ensure we have the phone number
   const phone = await ensurePhoneNumber(userState, chatId);
   const phoneNumber = phone || 'Not provided';
@@ -181,7 +176,8 @@ async function sendLeadSummaryToAdmin(userState, client, chatId) {
 `.trim();
 
   try {
-    await client.sendMessage('60126181683@c.us', leadSummary);
+    // Now we can call sendMessage properly
+    await sendMessage('60126181683@c.us', leadSummary);
     console.log('[DEBUG] Lead summary sent to admin successfully.');
   } catch (error) {
     console.error(`[DEBUG] Failed to send lead summary to admin: ${error.message}`);
@@ -191,34 +187,31 @@ async function sendLeadSummaryToAdmin(userState, client, chatId) {
 // ────────────────────────────────────────────────────────────────────────────────
 // Main handleState function
 // ────────────────────────────────────────────────────────────────────────────────
-async function handleState(userState, chatId, message, client) {
+async function handleState(userState, chatId, message, sendMessage, client) {
   const language = userState.language || 'en';
   console.log(`[DEBUG] handleState - Current State: ${userState.state}, Message: "${message}"`);
   console.log('[DEBUG] handleState - userState.data at start:', userState.data);
 
   try {
     switch (userState.state) {
-      // ------------------ GET_STARTED ------------------
       case STATES.GET_STARTED: {
         userState.state = STATES.LANGUAGE_SELECTION;
         console.log('[DEBUG] Transition to LANGUAGE_SELECTION');
-        await client.sendMessage(chatId, 'Welcome to FinZo AI! 👋');
-        await client.sendMessage(chatId, MESSAGES.WELCOME['en']);
+        await sendMessage(chatId, 'Welcome to FinZo AI! 👋');
+        await sendMessage(chatId, MESSAGES.WELCOME['en']);
         break;
       }
 
-      // ------------------ LANGUAGE_SELECTION ------------------
       case STATES.LANGUAGE_SELECTION: {
         const trimmedMessage = message.trim();
         if (['1', '2', '3'].includes(trimmedMessage)) {
-          userState.language =
-            trimmedMessage === '1' ? 'en' : trimmedMessage === '2' ? 'ms' : 'zh';
+          userState.language = trimmedMessage === '1' ? 'en' : trimmedMessage === '2' ? 'ms' : 'zh';
           userState.state = STATES.NAME_COLLECTION;
           console.log('[DEBUG] Language selected:', userState.language);
-          await client.sendMessage(chatId, MESSAGES.ASK_NAME[userState.language]);
+          await sendMessage(chatId, MESSAGES.ASK_NAME[userState.language]);
         } else {
           console.log('[DEBUG] Invalid language selection');
-          await client.sendMessage(chatId, MESSAGES.INVALID_INPUT['en']);
+          await sendMessage(chatId, MESSAGES.INVALID_INPUT['en']);
         }
         break;
       }
@@ -227,13 +220,13 @@ async function handleState(userState, chatId, message, client) {
       case STATES.NAME_COLLECTION: {
         if (!message.trim()) {
           console.log('[DEBUG] Empty name input');
-          await client.sendMessage(chatId, MESSAGES.INVALID_INPUT[language]);
+          await sendMessage(chatId, MESSAGES.INVALID_INPUT[language]);
         } else {
           userState.data.name = message.trim();
           console.log('[DEBUG] Name collected:', userState.data.name);
           await saveUserData(userState, chatId);
           userState.state = STATES.PATH_SELECTION;
-          await client.sendMessage(chatId, MESSAGES.ASK_LOAN_DETAILS[language]);
+          await sendMessage(chatId, MESSAGES.ASK_LOAN_DETAILS[language]);
         }
         break;
       }
@@ -245,15 +238,15 @@ async function handleState(userState, chatId, message, client) {
           userState.state = STATES.PATH_A_LOAN_AMOUNT;
           console.log('[DEBUG] User chose Path A');
           await saveUserData(userState, chatId);
-          await client.sendMessage(chatId, MESSAGES.PATH_A_LOAN_AMOUNT[language]);
+          await sendMessage(chatId, MESSAGES.PATH_A_LOAN_AMOUNT[language]);
         } else if (message === '2') {
           userState.state = STATES.PATH_B_ORIGINAL_LOAN_AMOUNT;
           console.log('[DEBUG] User chose Path B');
           await saveUserData(userState, chatId);
-          await client.sendMessage(chatId, MESSAGES.PATH_B_ORIGINAL_LOAN_AMOUNT[language]);
+          await sendMessage(chatId, MESSAGES.PATH_B_ORIGINAL_LOAN_AMOUNT[language]);
         } else {
           console.log('[DEBUG] Invalid input at PATH_SELECTION');
-          await client.sendMessage(chatId, MESSAGES.INVALID_INPUT[language]);
+          await sendMessage(chatId, MESSAGES.INVALID_INPUT[language]);
         }
         break;
       }
@@ -263,12 +256,12 @@ async function handleState(userState, chatId, message, client) {
         console.log('[DEBUG] PATH_A_LOAN_AMOUNT input:', message);
         const loanAmountValidation = validateLoanAmount(parseFloat(message), language);
         if (!loanAmountValidation.valid) {
-          return await client.sendMessage(chatId, loanAmountValidation.message);
+          return await sendMessage(chatId, loanAmountValidation.message);
         }
         userState.data.loanAmount = parseFloat(message);
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_A_TENURE;
-        await client.sendMessage(chatId, MESSAGES.PATH_A_TENURE[language]);
+        await sendMessage(chatId, MESSAGES.PATH_A_TENURE[language]);
         break;
       }
 
@@ -276,12 +269,12 @@ async function handleState(userState, chatId, message, client) {
         console.log('[DEBUG] PATH_A_TENURE input:', message);
         const tenureValidation = validateTenure(parseInt(message), 5, 35, language);
         if (!tenureValidation.valid) {
-          return await client.sendMessage(chatId, tenureValidation.message);
+          return await sendMessage(chatId, tenureValidation.message);
         }
         userState.data.tenure = parseInt(message);
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_A_INTEREST_RATE;
-        await client.sendMessage(chatId, MESSAGES.PATH_A_INTEREST_RATE[language]);
+        await sendMessage(chatId, MESSAGES.PATH_A_INTEREST_RATE[language]);
         break;
       }
 
@@ -289,7 +282,7 @@ async function handleState(userState, chatId, message, client) {
         console.log('[DEBUG] PATH_A_INTEREST_RATE input:', message);
         const interestRateValidation = validateInterestRate(parseFloat(message), language);
         if (!interestRateValidation.valid) {
-          return await client.sendMessage(chatId, interestRateValidation.message);
+          return await sendMessage(chatId, interestRateValidation.message);
         }
         userState.data.interestRate = parseFloat(message);
         console.log('[DEBUG] Path A Inputs before calculation:', userState.data);
@@ -303,7 +296,7 @@ async function handleState(userState, chatId, message, client) {
         console.log('[DEBUG] Path A Calculation Results:', pathAResults);
 
         if (!pathAResults) {
-          await client.sendMessage(
+          await sendMessage(
             chatId,
             'No suitable rates found for your loan amount. Please contact support.'
           );
@@ -315,7 +308,7 @@ async function handleState(userState, chatId, message, client) {
         console.log(`[DEBUG] Path A currentRepayment set to ${userState.data.currentRepayment}`);
 
         if (pathAResults.lifetimeSavings <= 0 || pathAResults.monthlySavings <= 0) {
-          await client.sendMessage(
+          await sendMessage(
             chatId,
             'Your current loan terms are already optimal. Refinancing might not be beneficial at this time.'
           );
@@ -324,7 +317,7 @@ async function handleState(userState, chatId, message, client) {
         }
 
         if (pathAResults.lifetimeSavings < 10000) {
-          await client.sendMessage(
+          await sendMessage(
             chatId,
             'The savings from refinancing are below RM10,000. It might not be worth refinancing at this time.'
           );
@@ -342,7 +335,7 @@ Here is your refinancing summary:
 Please hold on while we analyze if refinancing benefits you.
 `.trim();
 
-        await client.sendMessage(chatId, summaryMessage);
+        await sendMessage(chatId, summaryMessage);
 
         userState.data.monthlySavings = pathAResults.monthlySavings;
         userState.data.yearlySavings = pathAResults.yearlySavings;
@@ -356,38 +349,41 @@ Please hold on while we analyze if refinancing benefits you.
             pathAResults,
             userState.language
           );
-          await client.sendMessage(chatId, convincingMessageA);
-        
+          await sendMessage(chatId, convincingMessageA);
+
           console.log('[DEBUG] About to notify admin for Path A lead...');
           console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', userState.data);
-        
-          await client.sendMessage(
+
+          await sendMessage(
             chatId,
             'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
           );
-        
+
           // Notify Admin
-          await sendLeadSummaryToAdmin(userState, client, chatId);
-        
+          await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
+
           // Send lead data to the portal
           await sendLeadToPortal(userState);
-        
+
           userState.state = STATES.COMPLETE;
         } catch (error) {
           console.error('[DEBUG] Error generating convincing message for Path A:', error.message);
-          await client.sendMessage(
+          await sendMessage(
             chatId,
             'An error occurred while generating the convincing message. Please contact support.'
           );
-        
-          console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin (Path A Error):', userState.data);
-        
+
+          console.log(
+            '[DEBUG] userState.data before sendLeadSummaryToAdmin (Path A Error):',
+            userState.data
+          );
+
           // Notify Admin
-          await sendLeadSummaryToAdmin(userState, client, chatId);
-        
+          await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
+
           // Send lead data to the portal
           await sendLeadToPortal(userState);
-        
+
           userState.state = STATES.COMPLETE;
         }
         break;
@@ -398,12 +394,12 @@ Please hold on while we analyze if refinancing benefits you.
         console.log('[DEBUG] PATH_B_ORIGINAL_LOAN_AMOUNT input:', message);
         const originalLoanAmountValidation = validateLoanAmount(parseFloat(message), language);
         if (!originalLoanAmountValidation.valid) {
-          return await client.sendMessage(chatId, originalLoanAmountValidation.message);
+          return await sendMessage(chatId, originalLoanAmountValidation.message);
         }
         userState.data.originalLoanAmount = parseFloat(message);
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_B_ORIGINAL_TENURE;
-        await client.sendMessage(chatId, MESSAGES.PATH_B_ORIGINAL_TENURE[language]);
+        await sendMessage(chatId, MESSAGES.PATH_B_ORIGINAL_TENURE[language]);
         break;
       }
 
@@ -416,12 +412,12 @@ Please hold on while we analyze if refinancing benefits you.
           language
         );
         if (!originalTenureValidation.valid) {
-          return await client.sendMessage(chatId, originalTenureValidation.message);
+          return await sendMessage(chatId, originalTenureValidation.message);
         }
         userState.data.originalTenure = parseInt(message);
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_B_MONTHLY_PAYMENT;
-        await client.sendMessage(chatId, MESSAGES.PATH_B_MONTHLY_PAYMENT[language]);
+        await sendMessage(chatId, MESSAGES.PATH_B_MONTHLY_PAYMENT[language]);
         break;
       }
 
@@ -429,12 +425,12 @@ Please hold on while we analyze if refinancing benefits you.
         console.log('[DEBUG] PATH_B_MONTHLY_PAYMENT input:', message);
         const repaymentValidation = validateRepayment(parseFloat(message), language);
         if (!repaymentValidation.valid) {
-          return await client.sendMessage(chatId, repaymentValidation.message);
+          return await sendMessage(chatId, repaymentValidation.message);
         }
         userState.data.monthlyPayment = parseFloat(message);
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_B_YEARS_PAID;
-        await client.sendMessage(chatId, MESSAGES.PATH_B_YEARS_PAID[language]);
+        await sendMessage(chatId, MESSAGES.PATH_B_YEARS_PAID[language]);
         break;
       }
 
@@ -446,7 +442,7 @@ Please hold on while we analyze if refinancing benefits you.
           language
         );
         if (!yearsPaidValidation.valid) {
-          return await client.sendMessage(chatId, yearsPaidValidation.message);
+          return await sendMessage(chatId, yearsPaidValidation.message);
         }
         userState.data.yearsPaid = parseInt(message);
         await saveUserData(userState, chatId);
@@ -464,7 +460,7 @@ Please hold on while we analyze if refinancing benefits you.
           console.log('[DEBUG] Path B Calculation Results:', pathBResults);
 
           if (pathBResults.lifetimeSavings <= 0 || pathBResults.monthlySavings <= 0) {
-            await client.sendMessage(
+            await sendMessage(
               chatId,
               'Your current loan terms are already optimal. Refinancing might not be beneficial at this time.'
             );
@@ -473,7 +469,7 @@ Please hold on while we analyze if refinancing benefits you.
           }
 
           if (pathBResults.lifetimeSavings < 10000) {
-            await client.sendMessage(
+            await sendMessage(
               chatId,
               'The savings from refinancing are below RM10,000. It might not be worth refinancing at this time.'
             );
@@ -495,7 +491,7 @@ ${summaryTranslationB.header}
 ${summaryTranslationB.analysis}
 `.trim();
 
-          await client.sendMessage(chatId, summaryMessageB);
+          await sendMessage(chatId, summaryMessageB);
 
           userState.data.monthlySavings = pathBResults.monthlySavings;
           userState.data.yearlySavings = pathBResults.yearlySavings;
@@ -514,48 +510,51 @@ ${summaryTranslationB.analysis}
               pathBResults,
               userState.language
             );
-            await client.sendMessage(chatId, convincingMessageB);
-          
+            await sendMessage(chatId, convincingMessageB);
+
             console.log('[DEBUG] About to notify admin for Path B lead...');
             console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', userState.data);
-          
+
             // Notify Admin
-            await sendLeadSummaryToAdmin(userState, client, chatId);
-          
+            await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
+
             // Send lead data to the portal
             await sendLeadToPortal(userState);
-          
-            await client.sendMessage(
+
+            await sendMessage(
               chatId,
               'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
             );
-          
+
             userState.state = STATES.COMPLETE;
           } catch (error) {
             console.error('[DEBUG] Error generating convincing message for Path B:', error.message);
-            await client.sendMessage(
+            await sendMessage(
               chatId,
               'An error occurred while generating the convincing message. Please contact support.'
             );
-          
-            console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin (Path B Error):', userState.data);
-          
+
+            console.log(
+              '[DEBUG] userState.data before sendLeadSummaryToAdmin (Path B Error):',
+              userState.data
+            );
+
             // Notify Admin
-            await sendLeadSummaryToAdmin(userState, client, chatId);
-          
+            await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
+
             // Send lead data to the portal
             await sendLeadToPortal(userState);
-          
-            await client.sendMessage(
+
+            await sendMessage(
               chatId,
               'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
             );
-          
+
             userState.state = STATES.COMPLETE;
           }
         } catch (error) {
           console.error(`[DEBUG] Error in Path B Calculation: ${error.message}`);
-          await client.sendMessage(
+          await sendMessage(
             chatId,
             'An error occurred while processing your refinancing details. Please try again.'
           );
@@ -566,34 +565,33 @@ ${summaryTranslationB.analysis}
       // ------------------ COMPLETE ------------------
       case STATES.COMPLETE: {
         console.log('[DEBUG] In COMPLETE state. userState:', userState);
-      
+
         try {
           // Send lead data to the portal only after the conversation is complete
           console.log('[DEBUG] Sending final lead data to portal...');
           await sendLeadToPortal(userState);
-      
-          await client.sendMessage(
+
+          await sendMessage(
             chatId,
             'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
           );
-      
+
           userState.state = STATES.DONE;
         } catch (error) {
           console.error('[ERROR] Failed to send lead to portal in COMPLETE state:', error.message);
         }
         break;
       }
-     
 
       // ------------------ DEFAULT ------------------
       default: {
         console.log('[DEBUG] Default case triggered. Invalid state?');
-        await client.sendMessage(chatId, 'Invalid state. Please type "restart" to start again.');
+        await sendMessage(chatId, 'Invalid state. Please type "restart" to start again.');
       }
     }
   } catch (error) {
     console.error(`[DEBUG] Error in handleState: ${error.message}`);
-    await client.sendMessage(
+    await sendMessage(
       chatId,
       'An unexpected error occurred. Please try again or contact support.'
     );
@@ -633,11 +631,11 @@ async function sendLeadToPortal(userState) {
   }
 }
 
-
-// Export everything
+// Export only what you need. 
+// Make sure `sendMessage` is defined in another file or passed into `handleState`.
 module.exports = {
   initializeUserState,
   handleState,
-  sendLeadSummaryToAdmin,
-  sendLeadToPortal,
+  sendLeadSummaryToAdmin, // If you need it externally
+  sendLeadToPortal,       // If you need it externally
 };

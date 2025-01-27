@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { calculateSavings, handlePathSelection, startChatbot } = require('../controllers/chatbotController');
+const { calculateSavings, handlePathSelection } = require('../controllers/chatbotController');
+const { processWebhookEvent } = require('../services/whatsapp_cloud_api');
 
-// Start chatbot interaction
-router.post('/start', async (req, res, next) => {
+// Webhook for WhatsApp Cloud API
+router.post('/webhook', async (req, res, next) => {
   try {
-    await startChatbot(req, res);
+    await processWebhookEvent(req, res);
   } catch (err) {
     next(err);
   }

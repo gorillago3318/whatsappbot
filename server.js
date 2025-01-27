@@ -3,11 +3,11 @@ const dotenvConfig = require('./config/dotenvConfig');
 const sequelize = require('./config/dbConfig');
 const logger = require('./config/logger');
 const chatbotRoutes = require('./routes/chatbotRoutes');
-const { initializeWhatsApp, handleShutdown } = require('./services/whatsappService');
+const { processWebhookEvent } = require('./services/whatsappService'); // For handling webhook events
 
 // Validate Environment Variables
 const validateEnvVars = () => {
-  const requiredVars = ['DATABASE_URL', 'PORT'];
+  const requiredVars = ['DATABASE_URL', 'PORT', 'WHATSAPP_API_URL', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN'];
   const missingVars = requiredVars.filter((varName) => !process.env[varName]);
 
   if (missingVars.length > 0) {
@@ -43,6 +43,37 @@ app.get('/health', async (req, res) => {
   }
 });
 
+// WhatsApp Webhook Routes
+app.post('/webhook', async (req, res) => {
+  try {
+    await processWebhookEvent(req, res);
+  } catch (err) {
+    logger.error(`[ERROR] Failed to process webhook: ${err.message}`);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// WhatsApp Webhook Verification
+app.get('/webhook', (req, res) => {
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token) {
+    if (mode === 'subscribe' && token === verifyToken) {
+      logger.info('✅ Webhook verified successfully.');
+      res.status(200).send(challenge);
+    } else {
+      logger.error('❌ Webhook verification failed.');
+      res.status(403).send('Verification failed.');
+    }
+  } else {
+    res.status(400).send('Bad Request');
+  }
+});
+
 // Chatbot Routes
 app.use('/chatbot', chatbotRoutes);
 
@@ -70,17 +101,6 @@ sequelize.authenticate()
 sequelize.sync({ alter: true })
   .then(() => logger.info('✅ Database schema synced successfully.'))
   .catch((err) => logger.error(`❌ Error syncing database: ${err.message}`));
-
-// Initialize WhatsApp Client
-try {
-  initializeWhatsApp();
-} catch (err) {
-  logger.error(`❌ Error initializing WhatsApp client: ${err.message}`);
-}
-
-// Graceful Shutdown
-process.on('SIGTERM', handleShutdown);
-process.on('SIGINT', handleShutdown);
 
 // Start Server
 app.listen(PORT, () => {

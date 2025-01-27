@@ -1,175 +1,129 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const axios = require('axios');
 const logger = require('../config/logger');
-const qrcode = require('qrcode-terminal');
-const axios = require('axios'); // For referral token validation
 const { handleState, initializeUserState } = require('../utils/stateManager');
 const { STATES } = require('../config/constants');
-const { LEADS_API_URL } = process.env;
-const { TEMP_REFERRAL_API_URL } = process.env; // Ensure this is in your .env file
+const User = require('../models/User'); // Added import for User model
 
-// Initialize WhatsApp Client
-const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: {
-    executablePath: '/usr/bin/chromium-browser', // Path to the system-installed Chromium
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-extensions',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
-    handleSIGINT: false,
-  },
-});
+// WhatsApp Cloud API URLs and Token
+const apiUrl = process.env.WHATSAPP_API_URL; // e.g., https://graph.facebook.com/v14.0/YOUR_PHONE_NUMBER_ID/messages
+const accessToken = process.env.WHATSAPP_ACCESS_TOKEN; // Access token from Meta Cloud API
 
-// QR Code Event
-client.on('qr', (qr) => {
-  logger.info('QR Code received. Scan it with your WhatsApp app.');
-  qrcode.generate(qr, { small: true }); // Ensure QR code appears in the terminal
-});
+// Validate environment variables
+if (!apiUrl || !accessToken) {
+  logger.error('❌ Missing required environment variables: WHATSAPP_API_URL or WHATSAPP_ACCESS_TOKEN');
+  process.exit(1);
+}
 
-// Ready Event
-client.on('ready', () => {
-  logger.info('✅ WhatsApp client is ready!');
-});
+// Send a message using WhatsApp Cloud API
+const sendMessage = async (recipientId, message) => {
+  try {
+    const response = await axios.post(
+      apiUrl,
+      {
+        messaging_product: 'whatsapp',
+        to: recipientId,
+        type: 'text',
+        text: { body: message },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
 
-// Authentication Failed Event
-client.on('auth_failure', (msg) => {
-  logger.error('WhatsApp authentication failed:', msg);
-});
+    logger.info(`[INFO] Message sent to ${recipientId}: ${message}`);
+    return response.data;
+  } catch (err) {
+    logger.error(`[ERROR] Failed to send message to ${recipientId}: ${err.message}`);
+    throw err;
+  }
+};
 
-// Disconnected Event
-client.on('disconnected', (reason) => {
-  logger.warn('WhatsApp client disconnected:', reason);
-  client.initialize().catch(err => {
-    logger.error('Failed to reinitialize after disconnect:', err);
-  });
-});
+// Handle incoming messages
+const handleIncomingMessage = async (message) => {
+  const chatId = message.from; // Sender's phone number
 
-// Message Event
-client.on('message', async (msg) => {
-  const chatId = msg.from;
-  const message = msg.body.trim();
+  if (!message.text || !message.text.body) {
+    logger.warn(`[WARN] Received a non-text message from ${chatId}`);
+    return;
+  }
 
+  const text = message.text.body.trim(); // Message text
   const maskedChatId = chatId.replace(/(\d{4})$/, '**');
-  logger.info(`Message received from ${maskedChatId}: ${message}`);
+  logger.info(`Message received from ${maskedChatId}: ${text}`);
 
   try {
     // Initialize or retrieve the user's state
     const userState = initializeUserState(chatId);
 
-    // Handle referral code if the message starts with `ref:`
-    if (message.startsWith('ref:')) {
-      const token = message.replace('ref:', '').trim();
-      logger.info(`[DEBUG] Referral token detected: ${token}`);
+    // Automatically detect and save referral code from the first message
+    if (text.startsWith('ref:')) {
+      const referralCode = text.replace('ref:', '').trim();
+      logger.info(`[INFO] Referral code detected: ${referralCode}`);
 
-      try {
-        // Validate the referral token using the API
-        const response = await axios.get(`${TEMP_REFERRAL_API_URL}/validate/${token}`);
-        if (response.data && response.data.referral_code) {
-          const referralCode = response.data.referral_code;
-
-          logger.info(`[INFO] Referral token is valid. Referral code: ${referralCode}`);
-          userState.data.referral_code = referralCode;
-
-          // Inform the user that the referral code has been linked
-          await client.sendMessage(chatId, `Referral code "${referralCode}" has been successfully linked to your profile.`);
-        } else {
-          logger.warn(`[WARN] Invalid referral token: ${token}`);
-          await client.sendMessage(chatId, 'Invalid or expired referral token. Please try again.');
-          return;
-        }
-      } catch (error) {
-        logger.error(`[ERROR] Failed to validate referral token: ${error.message}`);
-        await client.sendMessage(chatId, 'An error occurred while validating your referral token. Please try again later.');
-        return;
+      // Save referral code to the Users table
+      let user = await User.findOne({ where: { chatId } });
+      if (user) {
+        await user.update({ referral_code: referralCode });
+        logger.info(`[INFO] Updated referral code for existing user: ${maskedChatId}`);
+      } else {
+        await User.create({ chatId, referral_code: referralCode });
+        logger.info(`[INFO] New user created with referral code: ${maskedChatId}`);
       }
+
+      // Confirm referral code to the user
+      await sendMessage(chatId, `Referral code "${referralCode}" has been linked to your profile.`);
+      return; // End processing for the current message
     }
 
     // Handle the restart command
-    if (message.toLowerCase() === 'restart') {
+    if (text.toLowerCase() === 'restart') {
       userState.state = STATES.GET_STARTED;
       userState.data = {};
       logger.info(`[INFO] User state reset for ${maskedChatId}`);
-      return await handleState(userState, chatId, message, client);
+      return await handleState(userState, chatId, text, sendMessage);
     }
 
-    // Handle the finish command to save user data
-    if (message.toLowerCase() === 'finish') {
-      try {
-        await Users.create({
-          phone_number: userState.data.phone_number,
-          name: userState.data.name,
-          referral_code: userState.data.referral_code || null,
-        });
-    
-        logger.info(`[INFO] User data saved successfully for ${maskedChatId}`);
-    
-        // Optionally, notify an external API endpoint
-        const leadData = {
-          name: userState.data.name,
-          phone_number: userState.data.phone_number,
-          referral_code: userState.data.referral_code,
-        };
-    
-        await axios.post(LEADS_API_URL, leadData);
-        logger.info('[INFO] Lead successfully sent to external API');
-      } catch (error) {
-        logger.error(`[ERROR] Failed to save user data for ${maskedChatId}: ${error.message}`);
-        await client.sendMessage(chatId, 'Something went wrong while saving your details. Please try again.');
-      }
-    
-      return;
-    }
-    
-
-    // Default user state handling
-    await handleState(userState, chatId, message, client);
+    // Default user state handling (conversation flow)
+    await handleState(userState, chatId, text, sendMessage);
   } catch (err) {
-    logger.error(`[ERROR] Failed to process message from ${maskedChatId}:`, {
-      error: err.message,
-      stack: err.stack,
-      state: userState?.state,
-    });
+    logger.error(`[ERROR] Failed to process message from ${maskedChatId}: ${err.message}`);
 
     const errorMessage = 'Sorry, something went wrong. Please type "restart" to start over.';
-    await client.sendMessage(chatId, errorMessage).catch((sendErr) => {
-      logger.error(`[ERROR] Failed to send error message to ${maskedChatId}:`, sendErr);
+    await sendMessage(chatId, errorMessage).catch((sendErr) => {
+      logger.error(`[ERROR] Failed to send error message to ${maskedChatId}: ${sendErr.message}`);
     });
   }
-});
-
-// Initialize WhatsApp Client
-const initializeWhatsApp = async () => {
-  logger.info('Initializing WhatsApp client...');
-  try {
-    await client.initialize();
-  } catch (err) {
-    logger.error('Failed to initialize WhatsApp client:', err);
-    throw err;
-  }
 };
 
-// Graceful Shutdown
-const handleShutdown = async () => {
-  logger.info('Shutting down WhatsApp client...');
+// Webhook for WhatsApp Cloud API
+const processWebhookEvent = async (req, res) => {
   try {
-    await client.destroy();
-    logger.info('WhatsApp client shut down successfully.');
-    process.exit(0);
+    const body = req.body;
+
+    // Ensure this is a WhatsApp webhook event
+    if (body.object === 'whatsapp_business_account' && body.entry) {
+      const messages = body.entry.flatMap(entry =>
+        entry.changes.flatMap(change => change.value.messages || [])
+      );
+
+      for (const message of messages) {
+        await handleIncomingMessage(message);
+      }
+
+      res.status(200).send('Event received');
+    } else {
+      res.status(404).send('Not a WhatsApp webhook');
+    }
   } catch (err) {
-    logger.error('Error during shutdown:', err);
-    process.exit(1);
+    logger.error('Error processing webhook:', err.message);
+    res.status(500).send('Internal Server Error');
   }
 };
-
-process.on('SIGTERM', handleShutdown);
-process.on('SIGINT', handleShutdown);
 
 module.exports = {
-  initializeWhatsApp,
-  handleShutdown,
+  sendMessage,
+  processWebhookEvent,
 };
