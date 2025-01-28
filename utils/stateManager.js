@@ -42,10 +42,10 @@ function extractReferralCode(queryString) {
   return params.get('ref') || null;
 }
 
-// Initialize user state with referral_code
 function initializeUserState(chatId, queryString) {
   const phoneNumber = extractPhoneNumber(chatId);
   const referralCode = extractReferralCode(queryString);
+
   console.log(`[DEBUG] initializeUserState: chatId=${chatId}, referralCode=${referralCode}`);
 
   if (!userStates[chatId]) {
@@ -53,16 +53,20 @@ function initializeUserState(chatId, queryString) {
       state: STATES.GET_STARTED,
       data: {
         phoneNumber,
-        referral_code: referralCode, // Track referral_code
+        referral_code: referralCode, // Store referral code temporarily
       },
       language: 'en',
     };
     console.log('[DEBUG] New userState created:', userStates[chatId]);
   } else {
     console.log('[DEBUG] Existing userState found:', userStates[chatId]);
+    if (referralCode) {
+      userStates[chatId].data.referral_code = referralCode; // Update referral code if provided
+    }
   }
   return userStates[chatId];
 }
+
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Format currency in MYR
@@ -83,32 +87,57 @@ async function saveUserData(userState, chatId) {
   const phoneNumber = userState.data.phoneNumber || extractPhoneNumber(chatId);
 
   try {
-    await User.upsert({
-      messengerId: chatId,
-      name: userState.data.name || null,
-      phoneNumber: phoneNumber || null,
-      referral_code: userState.data.referral_code || null,
-      loanAmount: userState.data.loanAmount || null,
-      tenure: userState.data.tenure || null,
-      interestRate: userState.data.interestRate || null,
-      originalLoanAmount: userState.data.originalLoanAmount || null,
-      originalTenure: userState.data.originalTenure || null,
-      currentRepayment: userState.data.currentRepayment || userState.data.monthlyPayment || null,
-      yearsPaid: userState.data.yearsPaid || null,
-      monthlySavings: userState.data.monthlySavings || null,
-      yearlySavings: userState.data.yearlySavings || null,
-      lifetimeSavings: userState.data.lifetimeSavings || null,
-      newMonthlyRepayment: userState.data.newMonthlyRepayment || null,
-      bankname: userState.data.bankname || null,
-      outstandingBalance: userState.data.outstandingBalance || null,
-      lastInteraction: new Date(),
-    });
+    let user = await User.findOne({ where: { messengerId: chatId } });
 
-    console.log('[DEBUG] User data saved successfully.');
+    if (user) {
+      // Update the existing user incrementally
+      await user.update({
+        name: userState.data.name || user.name || null,
+        phoneNumber: phoneNumber || user.phoneNumber || null,
+        referral_code: userState.data.referral_code || user.referral_code || null,
+        loanAmount: userState.data.loanAmount || user.loanAmount || null,
+        tenure: userState.data.tenure || user.tenure || null,
+        interestRate: userState.data.interestRate || user.interestRate || null,
+        originalLoanAmount: userState.data.originalLoanAmount || user.originalLoanAmount || null,
+        originalTenure: userState.data.originalTenure || user.originalTenure || null,
+        currentRepayment: userState.data.currentRepayment || user.currentRepayment || null,
+        monthlySavings: userState.data.monthlySavings || user.monthlySavings || null,
+        yearlySavings: userState.data.yearlySavings || user.yearlySavings || null,
+        lifetimeSavings: userState.data.lifetimeSavings || user.lifetimeSavings || null,
+        newMonthlyRepayment: userState.data.newMonthlyRepayment || user.newMonthlyRepayment || null,
+        bankname: userState.data.bankname || user.bankname || null,
+        outstandingBalance: userState.data.outstandingBalance || user.outstandingBalance || null,
+        lastInteraction: new Date(),
+      });
+      console.log(`[DEBUG] Updated user data for chatId: ${chatId}`);
+    } else {
+      // Create a new user record if none exists
+      await User.create({
+        messengerId: chatId,
+        name: userState.data.name || null,
+        phoneNumber: phoneNumber || null,
+        referral_code: userState.data.referral_code || null,
+        loanAmount: userState.data.loanAmount || null,
+        tenure: userState.data.tenure || null,
+        interestRate: userState.data.interestRate || null,
+        originalLoanAmount: userState.data.originalLoanAmount || null,
+        originalTenure: userState.data.originalTenure || null,
+        currentRepayment: userState.data.currentRepayment || null,
+        monthlySavings: userState.data.monthlySavings || null,
+        yearlySavings: userState.data.yearlySavings || null,
+        lifetimeSavings: userState.data.lifetimeSavings || null,
+        newMonthlyRepayment: userState.data.newMonthlyRepayment || null,
+        bankname: userState.data.bankname || null,
+        outstandingBalance: userState.data.outstandingBalance || null,
+        lastInteraction: new Date(),
+      });
+      console.log(`[DEBUG] Created new user with chatId: ${chatId}`);
+    }
   } catch (error) {
-    console.error('[ERROR] Failed to save user data:', error.message);
+    console.error(`[ERROR] Failed to save user data for chatId: ${chatId}`, error.message);
   }
 }
+
 
 // ────────────────────────────────────────────────────────────────────────────────
 // If userState.data.phoneNumber is missing, we fetch from DB
@@ -564,24 +593,30 @@ ${summaryTranslationB.analysis}
 
       // ------------------ COMPLETE ------------------
       case STATES.COMPLETE: {
-        console.log('[DEBUG] In COMPLETE state. userState:', userState);
-
+        console.log('[DEBUG] In COMPLETE state. Saving user data to database...');
+      
         try {
-          // Send lead data to the portal only after the conversation is complete
-          console.log('[DEBUG] Sending final lead data to portal...');
-          await sendLeadToPortal(userState);
-
+          // Save user data, including the referral code, to the database
+          await saveUserData(userState, chatId);
+      
+          // Send final confirmation to the user
           await sendMessage(
             chatId,
-            'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
+            'Thank you for completing your calculations! Your details, including the referral code, have been saved.'
           );
-
+      
           userState.state = STATES.DONE;
         } catch (error) {
-          console.error('[ERROR] Failed to send lead to portal in COMPLETE state:', error.message);
+          console.error(`[ERROR] Failed to save user data for chatId: ${chatId}`, error.message);
+          await sendMessage(
+            chatId,
+            'Sorry, something went wrong while saving your details. Please try again later.'
+          );
         }
+      
         break;
       }
+      
 
       // ------------------ DEFAULT ------------------
       default: {

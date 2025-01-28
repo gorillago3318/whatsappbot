@@ -1,4 +1,3 @@
- 
 // models/User.js
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/dbConfig');
@@ -11,7 +10,7 @@ const User = sequelize.define('User', {
   },
   name: {
     type: DataTypes.STRING,
-    allowNull: false,
+    allowNull: true, // Allow null for name
   },
   phoneNumber: {
     type: DataTypes.STRING,
