@@ -42,7 +42,7 @@ function extractReferralCode(queryString) {
   return params.get('ref') || null;
 }
 
-function initializeUserState(chatId, queryString) {
+function initializeUserState(chatId, queryString = '') {
   const phoneNumber = extractPhoneNumber(chatId);
   const referralCode = extractReferralCode(queryString);
 
@@ -53,7 +53,7 @@ function initializeUserState(chatId, queryString) {
       state: STATES.GET_STARTED,
       data: {
         phoneNumber,
-        referral_code: referralCode, // Store referral code temporarily
+        referral_code: referralCode || null, // Store referral code temporarily
       },
       language: 'en',
     };
@@ -61,12 +61,12 @@ function initializeUserState(chatId, queryString) {
   } else {
     console.log('[DEBUG] Existing userState found:', userStates[chatId]);
     if (referralCode) {
-      userStates[chatId].data.referral_code = referralCode; // Update referral code if provided
+      userStates[chatId].data.referral_code = referralCode; // Ensure referral is updated
     }
   }
+
   return userStates[chatId];
 }
-
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Format currency in MYR
@@ -85,38 +85,37 @@ function formatCurrency(value) {
 // ────────────────────────────────────────────────────────────────────────────────
 async function saveUserData(userState, chatId) {
   const phoneNumber = userState.data.phoneNumber || extractPhoneNumber(chatId);
+  const referralCode = userState.data.referral_code;
 
   try {
     let user = await User.findOne({ where: { messengerId: chatId } });
 
     if (user) {
-      // Update the existing user incrementally
       await user.update({
-        name: userState.data.name || user.name || null,
-        phoneNumber: phoneNumber || user.phoneNumber || null,
-        referral_code: userState.data.referral_code || user.referral_code || null,
-        loanAmount: userState.data.loanAmount || user.loanAmount || null,
-        tenure: userState.data.tenure || user.tenure || null,
-        interestRate: userState.data.interestRate || user.interestRate || null,
-        originalLoanAmount: userState.data.originalLoanAmount || user.originalLoanAmount || null,
-        originalTenure: userState.data.originalTenure || user.originalTenure || null,
-        currentRepayment: userState.data.currentRepayment || user.currentRepayment || null,
-        monthlySavings: userState.data.monthlySavings || user.monthlySavings || null,
-        yearlySavings: userState.data.yearlySavings || user.yearlySavings || null,
-        lifetimeSavings: userState.data.lifetimeSavings || user.lifetimeSavings || null,
-        newMonthlyRepayment: userState.data.newMonthlyRepayment || user.newMonthlyRepayment || null,
-        bankname: userState.data.bankname || user.bankname || null,
-        outstandingBalance: userState.data.outstandingBalance || user.outstandingBalance || null,
+        name: userState.data.name || user.name,
+        phoneNumber: phoneNumber || user.phoneNumber,
+        referral_code: referralCode || user.referral_code, // Ensure referral code is saved
+        loanAmount: userState.data.loanAmount || user.loanAmount,
+        tenure: userState.data.tenure || user.tenure,
+        interestRate: userState.data.interestRate || user.interestRate,
+        originalLoanAmount: userState.data.originalLoanAmount || user.originalLoanAmount,
+        originalTenure: userState.data.originalTenure || user.originalTenure,
+        currentRepayment: userState.data.currentRepayment || user.currentRepayment,
+        monthlySavings: userState.data.monthlySavings || user.monthlySavings,
+        yearlySavings: userState.data.yearlySavings || user.yearlySavings,
+        lifetimeSavings: userState.data.lifetimeSavings || user.lifetimeSavings,
+        newMonthlyRepayment: userState.data.newMonthlyRepayment || user.newMonthlyRepayment,
+        bankname: userState.data.bankname || user.bankname,
+        outstandingBalance: userState.data.outstandingBalance || user.outstandingBalance,
         lastInteraction: new Date(),
       });
       console.log(`[DEBUG] Updated user data for chatId: ${chatId}`);
     } else {
-      // Create a new user record if none exists
       await User.create({
         messengerId: chatId,
         name: userState.data.name || null,
         phoneNumber: phoneNumber || null,
-        referral_code: userState.data.referral_code || null,
+        referral_code: referralCode || null, // Ensure referral code is stored
         loanAmount: userState.data.loanAmount || null,
         tenure: userState.data.tenure || null,
         interestRate: userState.data.interestRate || null,
@@ -137,6 +136,7 @@ async function saveUserData(userState, chatId) {
     console.error(`[ERROR] Failed to save user data for chatId: ${chatId}`, error.message);
   }
 }
+
 
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -216,6 +216,56 @@ async function sendLeadSummaryToAdmin(userState, client, chatId, sendMessage) {
 // ────────────────────────────────────────────────────────────────────────────────
 // Main handleState function
 // ────────────────────────────────────────────────────────────────────────────────
+async function sendUserToPortal(chatId) {
+  try {
+    const user = await User.findOne({ where: { messengerId: chatId } });
+
+    if (!user) {
+      console.warn(`[WARN] No user found for chatId: ${chatId}`);
+      return;
+    }
+
+    // Ensure referral code is correctly retrieved
+    let referrerId = null;
+    let assignedAgentId = null;
+    if (user.referral_code) {
+      const referrer = await User.findOne({ where: { referral_code: user.referral_code } });
+      if (referrer) {
+        referrerId = referrer.id;
+        assignedAgentId = referrer.parent_referrer_id || referrer.id;
+      }
+    }
+
+    // ✅ Prepare the payload for the portal
+    const payload = {
+      name: user.name,
+      phone: user.phoneNumber,
+      referrer_code: user.referral_code || null, // Ensure referral is passed
+      referrer_id: referrerId || null, // Track referrer ID
+      loan_amount: user.loanAmount || user.originalLoanAmount || 0,
+      estimated_savings: user.lifetimeSavings || 0,
+      assigned_agent_id: assignedAgentId || null,
+      status: 'new',
+      source: 'whatsapp',
+    };
+
+    console.log('[DEBUG] Sending lead to portal:', payload);
+
+    // ✅ Send to external portal
+    const response = await axios.post(PORTAL_API_URL, payload, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (response.status === 201) {
+      console.info(`[INFO] Lead successfully sent to portal for phone: ${user.phoneNumber}`);
+    } else {
+      console.warn(`[WARN] Portal responded with unexpected status ${response.status}`);
+    }
+  } catch (error) {
+    console.error(`[ERROR] Failed to send user data to portal: ${error.message}`);
+  }
+}
+
 async function handleState(userState, chatId, message, sendMessage, client) {
   const language = userState.language || 'en';
   console.log(`[DEBUG] handleState - Current State: ${userState.state}, Message: "${message}"`);
@@ -226,7 +276,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
       case STATES.GET_STARTED: {
         userState.state = STATES.LANGUAGE_SELECTION;
         console.log('[DEBUG] Transition to LANGUAGE_SELECTION');
-        await sendMessage(chatId, 'Welcome to FinZo AI! 👋');
+        await sendMessage(chatId, 'Welcome to Quantify AI! 👋');
         await sendMessage(chatId, MESSAGES.WELCOME['en']);
         break;
       }
@@ -253,13 +303,16 @@ async function handleState(userState, chatId, message, sendMessage, client) {
         } else {
           userState.data.name = message.trim();
           console.log('[DEBUG] Name collected:', userState.data.name);
+      
+          // Save the name to the database
           await saveUserData(userState, chatId);
+      
           userState.state = STATES.PATH_SELECTION;
           await sendMessage(chatId, MESSAGES.ASK_LOAN_DETAILS[language]);
         }
         break;
       }
-
+      
       // ------------------ PATH_SELECTION ------------------
       case STATES.PATH_SELECTION: {
         console.log('[DEBUG] Path selection input:', message);
@@ -391,9 +444,6 @@ Please hold on while we analyze if refinancing benefits you.
           // Notify Admin
           await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
 
-          // Send lead data to the portal
-          await sendLeadToPortal(userState);
-
           userState.state = STATES.COMPLETE;
         } catch (error) {
           console.error('[DEBUG] Error generating convincing message for Path A:', error.message);
@@ -409,9 +459,6 @@ Please hold on while we analyze if refinancing benefits you.
 
           // Notify Admin
           await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
-
-          // Send lead data to the portal
-          await sendLeadToPortal(userState);
 
           userState.state = STATES.COMPLETE;
         }
@@ -547,9 +594,6 @@ ${summaryTranslationB.analysis}
             // Notify Admin
             await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
 
-            // Send lead data to the portal
-            await sendLeadToPortal(userState);
-
             await sendMessage(
               chatId,
               'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
@@ -571,9 +615,6 @@ ${summaryTranslationB.analysis}
             // Notify Admin
             await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
 
-            // Send lead data to the portal
-            await sendLeadToPortal(userState);
-
             await sendMessage(
               chatId,
               'Thank you for using our service! If you have any questions, please contact our admin at wa.me/60126181683. Alternatively, if you would like to restart the process, kindly type "restart".'
@@ -593,31 +634,22 @@ ${summaryTranslationB.analysis}
 
       // ------------------ COMPLETE ------------------
       case STATES.COMPLETE: {
-        console.log('[DEBUG] In COMPLETE state. Saving user data to database...');
-      
+        console.log('[DEBUG] In COMPLETE state. Sending user data to portal...');
         try {
-          // Save user data, including the referral code, to the database
+          // ✅ Ensure referral is saved before sending to portal
           await saveUserData(userState, chatId);
       
-          // Send final confirmation to the user
-          await sendMessage(
-            chatId,
-            'Thank you for completing your calculations! Your details, including the referral code, have been saved.'
-          );
+          // ✅ Send user data to the portal
+          await sendUserToPortal(chatId);
       
+          // ✅ No need to send a message to the user
           userState.state = STATES.DONE;
         } catch (error) {
-          console.error(`[ERROR] Failed to save user data for chatId: ${chatId}`, error.message);
-          await sendMessage(
-            chatId,
-            'Sorry, something went wrong while saving your details. Please try again later.'
-          );
+          console.error(`[ERROR] Failed to send user data to portal: ${error.message}`);
         }
-      
         break;
       }
-      
-
+    
       // ------------------ DEFAULT ------------------
       default: {
         console.log('[DEBUG] Default case triggered. Invalid state?');
@@ -633,44 +665,10 @@ ${summaryTranslationB.analysis}
   }
 }
 
-async function sendLeadToPortal(userState) {
-  const leadData = {
-    referrer_code: userState.data.referral_code || 'N/A',
-    phone: userState.data.phoneNumber || 'N/A',
-    loan_amount: userState.data.loanAmount || userState.data.originalLoanAmount || 0,
-    estimated_savings: userState.data.lifetimeSavings || 0,
-  };
-
-  if (!leadData.phone || !leadData.loan_amount) {
-    console.error('[ERROR] Missing required lead data. Not sending to portal:', leadData);
-    return;
-  }
-
-  console.log('[DEBUG] Sending lead data to portal:', leadData);
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const response = await axios.post(PORTAL_API_URL, leadData, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      console.log('[DEBUG] Lead sent to portal successfully:', response.data);
-      return; // Exit after successful send
-    } catch (error) {
-      console.error(`[ERROR] Failed to send lead to portal (Attempt ${attempt}):`, error.message);
-      if (attempt === 3) {
-        console.error('[ERROR] Giving up after 3 attempts.');
-      }
-    }
-  }
-}
-
 // Export only what you need. 
 // Make sure `sendMessage` is defined in another file or passed into `handleState`.
 module.exports = {
   initializeUserState,
   handleState,
   sendLeadSummaryToAdmin, // If you need it externally
-  sendLeadToPortal,       // If you need it externally
 };

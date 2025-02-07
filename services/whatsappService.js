@@ -75,13 +75,14 @@ const sendReferralButton = async (recipientId, referralCode) => {
         },
       }
     );
-    console.log(`[INFO] Referral button sent to ${recipientId} with code: ${referralCode}`);
+    logger.info(`[INFO] Referral button sent to ${recipientId} with code: ${referralCode}`);
   } catch (err) {
-    console.error(`[ERROR] Failed to send referral button to ${recipientId}: ${err.message}`);
+    logger.error(`[ERROR] Failed to send referral button to ${recipientId}: ${err.message}`);
   }
 };
 
-const handleIncomingMessage = async (message, refCode) => {
+// Handle incoming messages
+const handleIncomingMessage = async (message) => {
   const chatId = message.from;
 
   if (!message.text || !message.text.body) {
@@ -94,46 +95,45 @@ const handleIncomingMessage = async (message, refCode) => {
   logger.info(`Message received from ${maskedChatId}: ${text}`);
 
   try {
-    // Extract referral code from the message
+    // Extract referral code from the message (if exists)
     let referralCode = null;
-    const referralPrefix = 'Please send this message to activate your case number:';
-    if (text.startsWith(referralPrefix)) {
-      referralCode = text.replace(referralPrefix, '').trim(); // Extract the code after the prefix
-    } else if (text.startsWith('ref:')) {
-      referralCode = text.replace('ref:', '').trim(); // For simpler referral codes
+    if (text.toLowerCase().startsWith('ref:')) {
+      referralCode = text.replace(/ref:/i, '').trim();
+      logger.info(`[INFO] Detected referral code: ${referralCode}`);
     }
+
+    // Retrieve or create user state
+    let userState = initializeUserState(chatId, referralCode ? `ref=${referralCode}` : '');
+
+    // ✅ Fetch existing user from DB to check if referral already exists
+    let user = await User.findOne({ where: { messengerId: chatId } });
 
     if (referralCode) {
-      logger.info(`[INFO] Referral code detected in message: ${referralCode}`);
+      // ✅ Store referral in userState
+      userState.data.referral_code = referralCode;
 
-      try {
-        // Save referral code to the Users table
-        let user = await User.findOne({ where: { messengerId: chatId } });
-        if (user) {
-          if (!user.referral_code) {
-            await user.update({ referral_code: referralCode });
-            logger.info(`[INFO] Updated referral code for existing user: ${maskedChatId}`);
-          } else {
-            logger.info(`[INFO] User already has a referral code: ${user.referral_code}`);
-          }
-        } else {
-          await User.create({
-            messengerId: chatId,
-            referral_code: referralCode,
-            name: null, // Allow null names to avoid conflicts
-            phoneNumber: null, // Optional placeholder
-          });
-          logger.info(`[INFO] New user created with referral code: ${referralCode}`);
+      // ✅ Save or update the referral in the database
+      if (user) {
+        if (!user.referral_code) {
+          await user.update({ referral_code: referralCode });
+          logger.info(`[INFO] Updated referral code for existing user: ${maskedChatId}`);
         }
-      } catch (dbError) {
-        logger.error(`[ERROR] Failed to save referral code for chatId: ${chatId}`, dbError.message);
+      } else {
+        await User.create({
+          messengerId: chatId,
+          referral_code: referralCode,
+          name: null,
+          phoneNumber: null,
+        });
+        logger.info(`[INFO] New user created with referral code: ${maskedChatId}`);
+      }
+    } else {
+      // ✅ If no referral found in message, check if user already has a referral
+      if (user && user.referral_code) {
+        userState.data.referral_code = user.referral_code;
+        logger.info(`[INFO] Retrieved referral code from DB: ${user.referral_code} for ${maskedChatId}`);
       }
     }
-
-    // Initialize or retrieve the user's state
-    const userState = initializeUserState(chatId, { ref: refCode });
-
-    logger.debug(`[DEBUG] Referral code passed to userState: ${refCode || 'None'}`);
 
     // Handle the restart command
     if (text.toLowerCase() === 'restart') {
@@ -143,7 +143,7 @@ const handleIncomingMessage = async (message, refCode) => {
       return await handleState(userState, chatId, text, sendMessage);
     }
 
-    // Proceed directly to the welcome message
+    // Proceed directly to the welcome message if referral code is received
     if (referralCode) {
       await handleState(userState, chatId, 'GET_STARTED', sendMessage);
       return;
@@ -153,10 +153,7 @@ const handleIncomingMessage = async (message, refCode) => {
     await handleState(userState, chatId, text, sendMessage);
   } catch (err) {
     logger.error(`[ERROR] Failed to process message from ${maskedChatId}: ${err.message}`);
-    const errorMessage = 'Sorry, something went wrong. Please type "restart" to start over.';
-    await sendMessage(chatId, errorMessage).catch(sendErr =>
-      logger.error(`[ERROR] Failed to send error message to ${maskedChatId}: ${sendErr.message}`)
-    );
+    await sendMessage(chatId, 'Sorry, something went wrong. Please type "restart" to start over.');
   }
 };
 
@@ -166,51 +163,74 @@ const processWebhookEvent = async (req, res) => {
   try {
     const body = req.body;
 
-    // Ensure this is a WhatsApp webhook event
-    if (body.object === 'whatsapp_business_account' && body.entry) {
-      const messages = body.entry.flatMap(entry =>
-        entry.changes.flatMap(change => change.value.messages || [])
-      );
+    if (!body.object || body.object !== 'whatsapp_business_account' || !body.entry) {
+      logger.warn('[WARN] Received a non-WhatsApp webhook event');
+      return res.status(404).send('Not a WhatsApp webhook');
+    }
 
-      for (const message of messages) {
-        const chatId = message.from;
+    // Extract messages from webhook payload
+    const messages = body.entry.flatMap(entry =>
+      entry.changes.flatMap(change => change.value.messages || [])
+    );
 
-        // Debug incoming message payload
-        console.log(`[DEBUG] Incoming Webhook Payload:`, JSON.stringify(message, null, 2));
+    if (!messages.length) {
+      logger.warn('[WARN] No messages found in webhook payload.');
+      return res.status(200).send('No messages to process');
+    }
 
-        // Extract referral code from the user's pre-filled message (e.g., "ref:REF-5A559DFF")
-        const text = message.text?.body?.trim();
-        const referralCode = text?.startsWith('ref:') ? text.replace('ref:', '').trim() : null;
+    for (const message of messages) {
+      const chatId = message.from;
 
-        // Log referral code if found
-        if (referralCode) {
-          console.log(`[DEBUG] Referral code detected in user message: ${referralCode}`);
-        } else {
-          console.warn(`[WARN] No referral code found in message from chatId: ${chatId}`);
-        }
+      // Debug incoming message payload
+      logger.debug(`[DEBUG] Incoming Webhook Payload:`, JSON.stringify(message, null, 2));
 
-        // Initialize user state with referral code (store temporarily)
-        const userState = initializeUserState(chatId, { ref: referralCode });
-        console.log(`[DEBUG] User state initialized with referral code: ${userState.data.referral_code}`);
+      // Extract referral code
+      const text = message.text?.body?.trim();
+      const referralCode = text?.toLowerCase().startsWith('ref:') ? text.replace(/ref:/i, '').trim() : null;
 
-        // Process incoming message
-        try {
-          await handleIncomingMessage(message, referralCode);
-        } catch (err) {
-          console.error(`[ERROR] Failed to process message for chatId: ${chatId}`, err.message);
-        }
+      if (referralCode) {
+        logger.info(`[INFO] Referral code detected: ${referralCode}`);
       }
 
-      res.status(200).send('Event received');
-    } else {
-      console.warn('[WARN] Received a non-WhatsApp webhook event');
-      res.status(404).send('Not a WhatsApp webhook');
+      // ✅ Initialize user state with referral code
+      let userState = initializeUserState(chatId, referralCode ? `ref=${referralCode}` : '');
+
+      try {
+        // ✅ Ensure referral is stored immediately in DB
+        let user = await User.findOne({ where: { messengerId: chatId } });
+
+        if (referralCode) {
+          userState.data.referral_code = referralCode;
+
+          if (user) {
+            if (!user.referral_code) {
+              await user.update({ referral_code: referralCode });
+              logger.info(`[INFO] Updated referral code for existing user: ${chatId}`);
+            }
+          } else {
+            await User.create({
+              messengerId: chatId,
+              referral_code: referralCode,
+              name: null,
+              phoneNumber: null,
+            });
+            logger.info(`[INFO] New user created with referral code: ${chatId}`);
+          }
+        }
+
+        await handleIncomingMessage(message);
+      } catch (err) {
+        logger.error(`[ERROR] Failed to process message for chatId: ${chatId}: ${err.message}`);
+      }
     }
+
+    res.status(200).send('Event received');
   } catch (err) {
-    console.error('Error processing webhook:', err.message);
+    logger.error('[ERROR] Error processing webhook:', err.message);
     res.status(500).send('Internal Server Error');
   }
 };
+
 
 module.exports = {
   sendMessage,
