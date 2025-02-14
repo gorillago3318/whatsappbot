@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path'); // Added for serving static files
 const dotenvConfig = require('./config/dotenvConfig');
 const sequelize = require('./config/dbConfig');
 const logger = require('./config/logger');
@@ -7,7 +8,13 @@ const { processWebhookEvent } = require('./services/whatsappService'); // For ha
 
 // Validate Environment Variables
 const validateEnvVars = () => {
-  const requiredVars = ['DATABASE_URL', 'PORT', 'WHATSAPP_API_URL', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN'];
+  const requiredVars = [
+    'DATABASE_URL',
+    'PORT',
+    'WHATSAPP_API_URL',
+    'WHATSAPP_ACCESS_TOKEN',
+    'WHATSAPP_VERIFY_TOKEN'
+  ];
   const missingVars = requiredVars.filter((varName) => !process.env[varName]);
 
   if (missingVars.length > 0) {
@@ -19,6 +26,9 @@ validateEnvVars();
 
 const app = express();
 app.use(express.json());
+
+// Serve static files from the "public" directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = dotenvConfig.PORT || 3000;
 
@@ -56,7 +66,6 @@ app.post('/webhook', async (req, res) => {
 // WhatsApp Webhook Verification
 app.get('/webhook', (req, res) => {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
-
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -77,10 +86,9 @@ app.get('/webhook', (req, res) => {
 // Chatbot Routes
 app.use('/chatbot', chatbotRoutes);
 
-// 404 Handler for Undefined Routes
-app.use((req, res) => {
-  logger.warn(`[404] Route not found: ${req.method} ${req.originalUrl}`);
-  res.status(404).json({ error: 'Route not found' });
+// Fallback: For any route not handled above, serve the index.html from public folder
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Global Error Handling

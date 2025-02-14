@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const { PORTAL_API_URL } = require('../config/dotenvConfig');
+const { createLeadOnPortal } = require('../services/portalService');
 
 // Constants, Messages, Translations
 const { STATES } = require('../config/constants');
@@ -61,7 +62,7 @@ function initializeUserState(chatId, queryString = '') {
   } else {
     console.log('[DEBUG] Existing userState found:', userStates[chatId]);
     if (referralCode) {
-      userStates[chatId].data.referral_code = referralCode; // Ensure referral is updated
+      userStates[chatId].data.referral_code = referralCode; // Update referral code if available
     }
   }
 
@@ -137,8 +138,6 @@ async function saveUserData(userState, chatId) {
   }
 }
 
-
-
 // ────────────────────────────────────────────────────────────────────────────────
 // If userState.data.phoneNumber is missing, we fetch from DB
 // ────────────────────────────────────────────────────────────────────────────────
@@ -202,10 +201,9 @@ async function sendLeadSummaryToAdmin(userState, client, chatId, sendMessage) {
 - *Lifetime Savings*: ${formatCurrency(leadData.lifetimeSavings || 0)}
 
 🌐 *Language Preference*: ${userState.language || 'en'}
-`.trim();
+  `.trim();
 
   try {
-    // Now we can call sendMessage properly
     await sendMessage('60126181683@c.us', leadSummary);
     console.log('[DEBUG] Lead summary sent to admin successfully.');
   } catch (error) {
@@ -216,71 +214,68 @@ async function sendLeadSummaryToAdmin(userState, client, chatId, sendMessage) {
 // ────────────────────────────────────────────────────────────────────────────────
 // Main handleState function
 // ────────────────────────────────────────────────────────────────────────────────
-async function sendUserToPortal(chatId) {
-  try {
-    const user = await User.findOne({ where: { messengerId: chatId } });
-
-    if (!user) {
-      console.warn(`[WARN] No user found for chatId: ${chatId}`);
-      return;
-    }
-
-    // Ensure referral code is correctly retrieved
-    let referrerId = null;
-    let assignedAgentId = null;
-    if (user.referral_code) {
-      const referrer = await User.findOne({ where: { referral_code: user.referral_code } });
-      if (referrer) {
-        referrerId = referrer.id;
-        assignedAgentId = referrer.parent_referrer_id || referrer.id;
-      }
-    }
-
-    // ✅ Prepare the payload for the portal
-    const payload = {
-      name: user.name,
-      phone: user.phoneNumber,
-      referrer_code: user.referral_code || null, // Ensure referral is passed
-      referrer_id: referrerId || null, // Track referrer ID
-      loan_amount: user.loanAmount || user.originalLoanAmount || 0,
-      estimated_savings: user.lifetimeSavings || 0,
-      assigned_agent_id: assignedAgentId || null,
-      status: 'new',
-      source: 'whatsapp',
-    };
-
-    console.log('[DEBUG] Sending lead to portal:', payload);
-
-    // ✅ Send to external portal
-    const response = await axios.post(PORTAL_API_URL, payload, {
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-    if (response.status === 201) {
-      console.info(`[INFO] Lead successfully sent to portal for phone: ${user.phoneNumber}`);
-    } else {
-      console.warn(`[WARN] Portal responded with unexpected status ${response.status}`);
-    }
-  } catch (error) {
-    console.error(`[ERROR] Failed to send user data to portal: ${error.message}`);
-  }
-}
-
 async function handleState(userState, chatId, message, sendMessage, client) {
+  // Check if the user wants to restart the conversation
+  if (message.trim().toLowerCase() === 'restart') {
+    userState.state = STATES.GET_STARTED;
+    // Preserve the phone number and referral code while clearing other data if needed
+    userState.data = {
+      phoneNumber: extractPhoneNumber(chatId),
+      referral_code: userState.data.referral_code || null,
+    };
+    await saveUserData(userState, chatId);
+    await sendMessage(chatId, 'Your session has been restarted. Welcome to Quantify AI! 👋');
+    await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
+    return;
+  }
+
   const language = userState.language || 'en';
   console.log(`[DEBUG] handleState - Current State: ${userState.state}, Message: "${message}"`);
-  console.log('[DEBUG] handleState - userState.data at start:', userState.data);
+  console.log('[DEBUG] handleState - userState.data at start:', JSON.stringify(userState.data, null, 2));
 
   try {
     switch (userState.state) {
+      // ------------------ GET_STARTED ------------------
       case STATES.GET_STARTED: {
+        // If no referral code is preset, prompt for it.
+        if (!userState.data.referral_code) {
+          userState.state = STATES.REFERRAL_COLLECTION;
+          await sendMessage(
+            chatId,
+            "Welcome! Please enter your referral code starting with 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
+          );
+          break;
+        }
+        // If referral code exists, proceed with the welcome message.
         userState.state = STATES.LANGUAGE_SELECTION;
-        console.log('[DEBUG] Transition to LANGUAGE_SELECTION');
-        await sendMessage(chatId, 'Welcome to Quantify AI! 👋');
-        await sendMessage(chatId, MESSAGES.WELCOME['en']);
+        await sendMessage(chatId, "Welcome to Quantify AI! 👋");
+        await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
         break;
       }
-
+    
+      // ------------------ REFERRAL_COLLECTION ------------------
+      case STATES.REFERRAL_COLLECTION: {
+        const input = message.trim();
+        if (input.toLowerCase() === 'none') {
+          userState.data.referral_code = 'REF-CZ7B640D';
+        } else if (input.toUpperCase().startsWith('REF-')) {
+          userState.data.referral_code = input.toUpperCase();
+        } else {
+          await sendMessage(
+            chatId,
+            "Invalid referral code format. Please enter a referral code starting with 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
+          );
+          break;
+        }
+        console.log('[DEBUG] Referral code collected:', userState.data.referral_code);
+        await saveUserData(userState, chatId);
+        userState.state = STATES.LANGUAGE_SELECTION;
+        await sendMessage(chatId, "Welcome to Quantify AI! 👋");
+        await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
+        break;
+      }
+    
+      // ------------------ LANGUAGE_SELECTION ------------------
       case STATES.LANGUAGE_SELECTION: {
         const trimmedMessage = message.trim();
         if (['1', '2', '3'].includes(trimmedMessage)) {
@@ -294,7 +289,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
         }
         break;
       }
-
+    
       // ------------------ NAME_COLLECTION ------------------
       case STATES.NAME_COLLECTION: {
         if (!message.trim()) {
@@ -303,16 +298,14 @@ async function handleState(userState, chatId, message, sendMessage, client) {
         } else {
           userState.data.name = message.trim();
           console.log('[DEBUG] Name collected:', userState.data.name);
-      
-          // Save the name to the database
           await saveUserData(userState, chatId);
-      
           userState.state = STATES.PATH_SELECTION;
           await sendMessage(chatId, MESSAGES.ASK_LOAN_DETAILS[language]);
         }
         break;
       }
-      
+    
+
       // ------------------ PATH_SELECTION ------------------
       case STATES.PATH_SELECTION: {
         console.log('[DEBUG] Path selection input:', message);
@@ -367,7 +360,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
           return await sendMessage(chatId, interestRateValidation.message);
         }
         userState.data.interestRate = parseFloat(message);
-        console.log('[DEBUG] Path A Inputs before calculation:', userState.data);
+        console.log('[DEBUG] Path A Inputs before calculation:', JSON.stringify(userState.data, null, 2));
 
         const pathAResults = await performPathACalculation(
           userState.data.loanAmount,
@@ -375,7 +368,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
           userState.data.interestRate
         );
 
-        console.log('[DEBUG] Path A Calculation Results:', pathAResults);
+        console.log('[DEBUG] Path A Calculation Results:', JSON.stringify(pathAResults, null, 2));
 
         if (!pathAResults) {
           await sendMessage(
@@ -383,7 +376,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
             'No suitable rates found for your loan amount. Please contact support.'
           );
           userState.state = STATES.COMPLETE;
-          return;
+          break;
         }
 
         userState.data.currentRepayment = pathAResults.currentRepayment || 0;
@@ -395,7 +388,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
             'Your current loan terms are already optimal. Refinancing might not be beneficial at this time.'
           );
           userState.state = STATES.COMPLETE;
-          return;
+          break;
         }
 
         if (pathAResults.lifetimeSavings < 10000) {
@@ -404,18 +397,21 @@ async function handleState(userState, chatId, message, sendMessage, client) {
             'The savings from refinancing are below RM10,000. It might not be worth refinancing at this time.'
           );
           userState.state = STATES.COMPLETE;
-          return;
+          break;
         }
 
-        const summaryMessage = `
-Here is your refinancing summary:
-- Monthly Savings: ${formatCurrency(pathAResults.monthlySavings)}
-- Yearly Savings: ${formatCurrency(pathAResults.yearlySavings)}
-- Total Savings: ${formatCurrency(pathAResults.lifetimeSavings)}
-- New Monthly Repayment: ${formatCurrency(pathAResults.newMonthlyRepayment)}
-- Bank: ${pathAResults.bankname} (Interest Rate: ${pathAResults.newInterestRate}%)
-Please hold on while we analyze if refinancing benefits you.
+        const summaryTranslationA = SUMMARY_TRANSLATIONS[userState.language];
+const summaryMessage = `
+${summaryTranslationA.header}
+- ${summaryTranslationA.monthlySavings}: ${formatCurrency(pathAResults.monthlySavings)}
+- ${summaryTranslationA.yearlySavings}: ${formatCurrency(pathAResults.yearlySavings)}
+- ${summaryTranslationA.totalSavings}: ${formatCurrency(pathAResults.lifetimeSavings)}
+- ${summaryTranslationA.newRepayment}: ${formatCurrency(pathAResults.newMonthlyRepayment)}
+- ${summaryTranslationA.bank}: ${pathAResults.bankname} (${summaryTranslationA.interestRate}: ${pathAResults.newInterestRate}%)
+
+${summaryTranslationA.analysis}
 `.trim();
+
 
         await sendMessage(chatId, summaryMessage);
 
@@ -434,7 +430,7 @@ Please hold on while we analyze if refinancing benefits you.
           await sendMessage(chatId, convincingMessageA);
 
           console.log('[DEBUG] About to notify admin for Path A lead...');
-          console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', userState.data);
+          console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', JSON.stringify(userState.data, null, 2));
 
           await sendMessage(
             chatId,
@@ -452,10 +448,7 @@ Please hold on while we analyze if refinancing benefits you.
             'An error occurred while generating the convincing message. Please contact support.'
           );
 
-          console.log(
-            '[DEBUG] userState.data before sendLeadSummaryToAdmin (Path A Error):',
-            userState.data
-          );
+          console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin (Path A Error):', JSON.stringify(userState.data, null, 2));
 
           // Notify Admin
           await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
@@ -523,7 +516,7 @@ Please hold on while we analyze if refinancing benefits you.
         userState.data.yearsPaid = parseInt(message);
         await saveUserData(userState, chatId);
 
-        console.log('[DEBUG] Path B Inputs before calculation:', userState.data);
+        console.log('[DEBUG] Path B Inputs before calculation:', JSON.stringify(userState.data, null, 2));
 
         try {
           const pathBResults = await performPathBCalculation(
@@ -533,7 +526,7 @@ Please hold on while we analyze if refinancing benefits you.
             userState.data.yearsPaid
           );
 
-          console.log('[DEBUG] Path B Calculation Results:', pathBResults);
+          console.log('[DEBUG] Path B Calculation Results:', JSON.stringify(pathBResults, null, 2));
 
           if (pathBResults.lifetimeSavings <= 0 || pathBResults.monthlySavings <= 0) {
             await sendMessage(
@@ -541,7 +534,7 @@ Please hold on while we analyze if refinancing benefits you.
               'Your current loan terms are already optimal. Refinancing might not be beneficial at this time.'
             );
             userState.state = STATES.COMPLETE;
-            return;
+            break;
           }
 
           if (pathBResults.lifetimeSavings < 10000) {
@@ -550,7 +543,7 @@ Please hold on while we analyze if refinancing benefits you.
               'The savings from refinancing are below RM10,000. It might not be worth refinancing at this time.'
             );
             userState.state = STATES.COMPLETE;
-            return;
+            break;
           }
 
           const summaryTranslationB = SUMMARY_TRANSLATIONS[userState.language];
@@ -560,12 +553,10 @@ ${summaryTranslationB.header}
 - ${summaryTranslationB.yearlySavings}: ${formatCurrency(pathBResults.yearlySavings)}
 - ${summaryTranslationB.totalSavings}: ${formatCurrency(pathBResults.lifetimeSavings)}
 - ${summaryTranslationB.newRepayment}: ${formatCurrency(pathBResults.newMonthlyRepayment)}
-- ${summaryTranslationB.bank}: ${pathBResults.bankname} (${summaryTranslationB.interestRate}: ${
-            pathBResults.newInterestRate
-          }%)
+- ${summaryTranslationB.bank}: ${pathBResults.bankname} (${summaryTranslationB.interestRate}: ${pathBResults.newInterestRate}%)
 
 ${summaryTranslationB.analysis}
-`.trim();
+          `.trim();
 
           await sendMessage(chatId, summaryMessageB);
 
@@ -589,7 +580,7 @@ ${summaryTranslationB.analysis}
             await sendMessage(chatId, convincingMessageB);
 
             console.log('[DEBUG] About to notify admin for Path B lead...');
-            console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', userState.data);
+            console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin:', JSON.stringify(userState.data, null, 2));
 
             // Notify Admin
             await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
@@ -607,10 +598,7 @@ ${summaryTranslationB.analysis}
               'An error occurred while generating the convincing message. Please contact support.'
             );
 
-            console.log(
-              '[DEBUG] userState.data before sendLeadSummaryToAdmin (Path B Error):',
-              userState.data
-            );
+            console.log('[DEBUG] userState.data before sendLeadSummaryToAdmin (Path B Error):', JSON.stringify(userState.data, null, 2));
 
             // Notify Admin
             await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
@@ -634,26 +622,45 @@ ${summaryTranslationB.analysis}
 
       // ------------------ COMPLETE ------------------
       case STATES.COMPLETE: {
-        console.log('[DEBUG] In COMPLETE state. Sending user data to portal...');
+        console.log('[DEBUG] In COMPLETE state. Creating lead on portal...');
         try {
-          // ✅ Ensure referral is saved before sending to portal
           await saveUserData(userState, chatId);
+          console.log('[DEBUG] Final userState.data before building payload:', JSON.stringify(userState.data, null, 2));
       
-          // ✅ Send user data to the portal
-          await sendUserToPortal(chatId);
+          const payload = {
+            name: userState.data.name,
+            phone: userState.data.phoneNumber,
+            referrer_code: userState.data.referral_code || null,
+            loan_amount: userState.data.loanAmount || userState.data.originalLoanAmount || 0,
+            estimated_savings: userState.data.lifetimeSavings || 0,
+            monthly_savings: userState.data.monthlySavings || 0,
+            yearly_savings: userState.data.yearlySavings || 0,
+            new_monthly_repayment: userState.data.newMonthlyRepayment || 0,
+            bankname: userState.data.bankname || '',
+            status: 'New',
+            assigned_agent_id: null,
+            source: 'whatsapp',
+          };
       
-          // ✅ No need to send a message to the user
+          console.log('[DEBUG] Payload for portal:', JSON.stringify(payload, null, 2));
+          const portalResponse = await createLeadOnPortal(payload);
+          console.log('[DEBUG] Portal response:', JSON.stringify(portalResponse, null, 2));
+      
+          await sendMessage(chatId, 'Your lead has been created successfully on our portal!');
           userState.state = STATES.DONE;
         } catch (error) {
-          console.error(`[ERROR] Failed to send user data to portal: ${error.message}`);
+          console.error(`[ERROR] Failed to create lead on portal: ${error.message}`);
+          await sendMessage(chatId, '❌ There was an error creating your lead. Please try again later.');
         }
         break;
       }
-    
+      
+
       // ------------------ DEFAULT ------------------
       default: {
         console.log('[DEBUG] Default case triggered. Invalid state?');
         await sendMessage(chatId, 'Invalid state. Please type "restart" to start again.');
+        break;
       }
     }
   } catch (error) {

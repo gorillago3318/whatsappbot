@@ -41,48 +41,49 @@ const sendMessage = async (recipientId, message) => {
   }
 };
 
-// Send dynamic referral button
-const sendReferralButton = async (recipientId, referralCode) => {
+// Function to authenticate the agent and get a JWT token
+async function getAgentToken(phone) {
   try {
-    const response = await axios.post(
-      apiUrl,
-      {
-        messaging_product: 'whatsapp',
-        to: recipientId,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: `Hi! You were referred by code ${referralCode}. Please confirm your referral.`,
-          },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: {
-                  id: referralCode,
-                  title: 'Confirm Referral',
-                },
-              },
-            ],
-          },
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-    logger.info(`[INFO] Referral button sent to ${recipientId} with code: ${referralCode}`);
-  } catch (err) {
-    logger.error(`[ERROR] Failed to send referral button to ${recipientId}: ${err.message}`);
-  }
-};
+    const response = await axios.post('https://qaichatbot.chat/api/auth/login', {
+      phone: phone,
+      password: "Admin!" // You might need a fixed password for first-time logins
+    });
 
-// Handle incoming messages
-const handleIncomingMessage = async (message) => {
+    return response.data.accessToken;
+  } catch (error) {
+    console.error('[ERROR] Failed to log in agent:', error.response ? error.response.data : error.message);
+    return null;
+  }
+}
+
+// Function to send lead data directly (No authentication)
+async function sendLeadToPortal(name, phone, loanAmount, referrerCode) {
+  try {
+    console.log(`[DEBUG] Sending lead to portal: Name=${name}, Phone=${phone}, Loan=${loanAmount}, Ref=${referrerCode}`);
+
+    const response = await axios.post('https://qaichatbot.chat/api/leads', {
+      name,
+      phone,
+      loan_amount: loanAmount,
+      referrer_code: referrerCode || null
+    }, {
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
+
+    console.log('[INFO] Lead sent successfully:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('[ERROR] Failed to send lead:', error.response ? error.response.data : error.message);
+    if (error.response) {
+      console.error('[DEBUG] Full Error Response:', JSON.stringify(error.response.data, null, 2));
+    }
+  }
+}
+
+// Modified: Now handleIncomingMessage accepts userState as a parameter
+const handleIncomingMessage = async (message, userState) => {
   const chatId = message.from;
 
   if (!message.text || !message.text.body) {
@@ -92,71 +93,46 @@ const handleIncomingMessage = async (message) => {
 
   const text = message.text.body.trim();
   const maskedChatId = chatId.replace(/(\d{4})$/, '**');
-  logger.info(`Message received from ${maskedChatId}: ${text}`);
+  logger.info(`[INFO] Message received from ${maskedChatId}: ${text}`);
 
   try {
-    // Extract referral code from the message (if exists)
-    let referralCode = null;
-    if (text.toLowerCase().startsWith('ref:')) {
-      referralCode = text.replace(/ref:/i, '').trim();
-      logger.info(`[INFO] Detected referral code: ${referralCode}`);
-    }
+    // ✅ Loan Processing Debug Logs
+    if (text.toLowerCase().startsWith('loan:')) {
+      console.log(`[DEBUG] Processing Loan Request: ${text}`);
 
-    // Retrieve or create user state
-    let userState = initializeUserState(chatId, referralCode ? `ref=${referralCode}` : '');
+      const details = text.replace(/loan:/i, '').trim().split(',');
+      if (details.length < 3) {
+        return sendMessage(chatId, '❌ Please provide loan details in this format: Loan: Name, Phone, LoanAmount, [Referral Code]');
+      }
 
-    // ✅ Fetch existing user from DB to check if referral already exists
-    let user = await User.findOne({ where: { messengerId: chatId } });
+      const name = details[0].trim();
+      const phone = details[1].trim();
+      const loanAmount = parseFloat(details[2].trim());
+      const referrerCode = details.length > 3 ? details[3].trim() : null;
 
-    if (referralCode) {
-      // ✅ Store referral in userState
-      userState.data.referral_code = referralCode;
+      console.log(`[DEBUG] Extracted Loan Details: Name=${name}, Phone=${phone}, Loan=${loanAmount}, Ref=${referrerCode}`);
 
-      // ✅ Save or update the referral in the database
-      if (user) {
-        if (!user.referral_code) {
-          await user.update({ referral_code: referralCode });
-          logger.info(`[INFO] Updated referral code for existing user: ${maskedChatId}`);
-        }
+      sendMessage(chatId, '✅ Processing your loan request...');
+
+      // Send lead to portal
+      const leadResponse = await sendLeadToPortal(name, phone, loanAmount, referrerCode);
+      if (leadResponse && leadResponse.lead) {
+        console.log(`[INFO] Lead sent successfully, Assigned Agent: ${leadResponse.lead.assigned_agent_id}`);
+        sendMessage(chatId, `🎉 Lead created successfully! Assigned Agent: ${leadResponse.lead.assigned_agent_id}`);
       } else {
-        await User.create({
-          messengerId: chatId,
-          referral_code: referralCode,
-          name: null,
-          phoneNumber: null,
-        });
-        logger.info(`[INFO] New user created with referral code: ${maskedChatId}`);
+        console.error(`[ERROR] Lead submission failed:`, leadResponse);
+        sendMessage(chatId, '❌ Failed to create lead. Please try again later.');
       }
-    } else {
-      // ✅ If no referral found in message, check if user already has a referral
-      if (user && user.referral_code) {
-        userState.data.referral_code = user.referral_code;
-        logger.info(`[INFO] Retrieved referral code from DB: ${user.referral_code} for ${maskedChatId}`);
-      }
-    }
-
-    // Handle the restart command
-    if (text.toLowerCase() === 'restart') {
-      userState.state = STATES.GET_STARTED;
-      userState.data = {};
-      logger.info(`[INFO] User state reset for ${maskedChatId}`);
-      return await handleState(userState, chatId, text, sendMessage);
-    }
-
-    // Proceed directly to the welcome message if referral code is received
-    if (referralCode) {
-      await handleState(userState, chatId, 'GET_STARTED', sendMessage);
       return;
     }
 
-    // Default user state handling (conversation flow)
-    await handleState(userState, chatId, text, sendMessage);
+    // Default user state handling (pass null for client if you don't have one)
+    await handleState(userState, chatId, text, sendMessage, null);
   } catch (err) {
     logger.error(`[ERROR] Failed to process message from ${maskedChatId}: ${err.message}`);
-    await sendMessage(chatId, 'Sorry, something went wrong. Please type "restart" to start over.');
+    await sendMessage(chatId, '❌ Something went wrong. Please try again.');
   }
 };
-
 
 // Webhook for WhatsApp Cloud API
 const processWebhookEvent = async (req, res) => {
@@ -184,7 +160,7 @@ const processWebhookEvent = async (req, res) => {
       // Debug incoming message payload
       logger.debug(`[DEBUG] Incoming Webhook Payload:`, JSON.stringify(message, null, 2));
 
-      // Extract referral code
+      // Extract referral code (if the message starts with "ref:")
       const text = message.text?.body?.trim();
       const referralCode = text?.toLowerCase().startsWith('ref:') ? text.replace(/ref:/i, '').trim() : null;
 
@@ -198,10 +174,8 @@ const processWebhookEvent = async (req, res) => {
       try {
         // ✅ Ensure referral is stored immediately in DB
         let user = await User.findOne({ where: { messengerId: chatId } });
-
         if (referralCode) {
           userState.data.referral_code = referralCode;
-
           if (user) {
             if (!user.referral_code) {
               await user.update({ referral_code: referralCode });
@@ -218,7 +192,8 @@ const processWebhookEvent = async (req, res) => {
           }
         }
 
-        await handleIncomingMessage(message);
+        // Pass the created userState to the message handler
+        await handleIncomingMessage(message, userState);
       } catch (err) {
         logger.error(`[ERROR] Failed to process message for chatId: ${chatId}: ${err.message}`);
       }
@@ -230,7 +205,6 @@ const processWebhookEvent = async (req, res) => {
     res.status(500).send('Internal Server Error');
   }
 };
-
 
 module.exports = {
   sendMessage,
