@@ -38,6 +38,16 @@ function extractPhoneNumber(chatId) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
+// Helper to extract a referral code from a message, regardless of its position.
+// This regex looks for "REF-" followed by 8 or more alphanumeric characters.
+// ────────────────────────────────────────────────────────────────────────────────
+function extractReferralCodeFromMessage(message) {
+  const regex = /(REF-\w{8,})/i;
+  const match = message.match(regex);
+  return match ? match[1].toUpperCase() : null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────────
 // In-memory user states
 // ────────────────────────────────────────────────────────────────────────────────
 let userStates = {};
@@ -212,7 +222,6 @@ async function sendLeadSummaryToAdmin(userState, client, chatId, sendMessage) {
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Helper to create lead on portal and notify admin immediately
-// (Assigned agent notification removed.)
 // ────────────────────────────────────────────────────────────────────────────────
 async function createLeadAndNotify(userState, chatId, sendMessage, client) {
   try {
@@ -243,7 +252,6 @@ async function createLeadAndNotify(userState, chatId, sendMessage, client) {
     // Notify admin.
     await sendLeadSummaryToAdmin(userState, client, chatId, sendMessage);
 
-    // We are no longer notifying the assigned agent here.
     userState.state = STATES.DONE;
   } catch (error) {
     console.error(`[ERROR] Failed to create lead on portal: ${error.message}`);
@@ -275,9 +283,11 @@ async function handleState(userState, chatId, message, sendMessage, client) {
     switch (userState.state) {
       case STATES.GET_STARTED: {
         const trimmedMessage = message.trim();
-        if (!userState.data.referral_code && trimmedMessage.toUpperCase().startsWith('REF-')) {
-          userState.data.referral_code = trimmedMessage.toUpperCase();
-          console.log('[DEBUG] Referral code set from first message:', userState.data.referral_code);
+        // Use the helper function to extract referral code anywhere in the message.
+        const extractedCode = extractReferralCodeFromMessage(trimmedMessage);
+        if (!userState.data.referral_code && extractedCode) {
+          userState.data.referral_code = extractedCode;
+          console.log('[DEBUG] Referral code captured from message:', userState.data.referral_code);
           userState.state = STATES.LANGUAGE_SELECTION;
           await sendMessage(chatId, "Welcome to Quantify AI! 👋");
           await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
@@ -287,7 +297,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
           userState.state = STATES.REFERRAL_COLLECTION;
           await sendMessage(
             chatId,
-            "Welcome! Please enter your referral code starting with 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
+            "Welcome! Please enter your referral code containing 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
           );
           break;
         }
@@ -301,14 +311,17 @@ async function handleState(userState, chatId, message, sendMessage, client) {
         const input = message.trim();
         if (input.toLowerCase() === 'none') {
           userState.data.referral_code = 'REF-CZ7B640D';
-        } else if (input.toUpperCase().startsWith('REF-')) {
-          userState.data.referral_code = input.toUpperCase();
         } else {
-          await sendMessage(
-            chatId,
-            "Invalid referral code format. Please enter a referral code starting with 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
-          );
-          break;
+          const extractedCode = extractReferralCodeFromMessage(input);
+          if (extractedCode) {
+            userState.data.referral_code = extractedCode;
+          } else {
+            await sendMessage(
+              chatId,
+              "Invalid referral code format. Please include a referral code containing 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
+            );
+            break;
+          }
         }
         console.log('[DEBUG] Referral code collected:', userState.data.referral_code);
         await saveUserData(userState, chatId);
