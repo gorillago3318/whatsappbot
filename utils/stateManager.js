@@ -23,12 +23,11 @@ const {
   performPathBCalculation,
 } = require('./calculation');
 
-// GPT Utility
+// GPT Utility (updated to accept options for brevity)
 const { generateConvincingMessage } = require('../services/openaiService');
 
 // Database Models
 const User = require('../models/User');
-// (The Agent model is no longer used for sending messages to agents in this version.)
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Helper to extract phone number from chatId
@@ -38,7 +37,7 @@ function extractPhoneNumber(chatId) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
-// Helper to extract a referral code from a message, regardless of its position.
+// Helper to extract a referral code from a message.
 // This regex looks for "REF-" followed by 8 or more alphanumeric characters.
 // ────────────────────────────────────────────────────────────────────────────────
 function extractReferralCodeFromMessage(message) {
@@ -48,14 +47,29 @@ function extractReferralCodeFromMessage(message) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────
-// In-memory user states
+// Helper to extract referral code from a query string
 // ────────────────────────────────────────────────────────────────────────────────
-let userStates = {};
-
 function extractReferralCode(queryString) {
   const params = new URLSearchParams(queryString);
   return params.get('ref') || null;
 }
+
+// ────────────────────────────────────────────────────────────────────────────────
+// Helper to parse numeric input (handles shorthand like "5k" or "10k")
+// ────────────────────────────────────────────────────────────────────────────────
+function parseNumericInput(input) {
+  input = input.trim().toLowerCase();
+  if (input.endsWith('k')) {
+    const numberPart = parseFloat(input.slice(0, -1));
+    return isNaN(numberPart) ? NaN : numberPart * 1000;
+  }
+  return parseFloat(input);
+}
+
+// ────────────────────────────────────────────────────────────────────────────────
+// In-memory user states
+// ────────────────────────────────────────────────────────────────────────────────
+let userStates = {};
 
 function initializeUserState(chatId, queryString = '') {
   const phoneNumber = extractPhoneNumber(chatId);
@@ -283,7 +297,7 @@ async function handleState(userState, chatId, message, sendMessage, client) {
     switch (userState.state) {
       case STATES.GET_STARTED: {
         const trimmedMessage = message.trim();
-        // Use the helper function to extract referral code anywhere in the message.
+        // Attempt to capture referral code from message
         const extractedCode = extractReferralCodeFromMessage(trimmedMessage);
         if (!userState.data.referral_code && extractedCode) {
           userState.data.referral_code = extractedCode;
@@ -380,11 +394,13 @@ async function handleState(userState, chatId, message, sendMessage, client) {
       
       case STATES.PATH_A_LOAN_AMOUNT: {
         console.log('[DEBUG] PATH_A_LOAN_AMOUNT input:', message);
-        const loanAmountValidation = validateLoanAmount(parseFloat(message), language);
+        // Use parseNumericInput to handle shorthand values like "5k"
+        const amount = parseNumericInput(message);
+        const loanAmountValidation = validateLoanAmount(amount, language);
         if (!loanAmountValidation.valid) {
           return await sendMessage(chatId, loanAmountValidation.message);
         }
-        userState.data.loanAmount = parseFloat(message);
+        userState.data.loanAmount = loanAmountValidation.amount || amount;
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_A_TENURE;
         await sendMessage(chatId, MESSAGES.PATH_A_TENURE[language]);
@@ -473,9 +489,11 @@ ${summaryTranslationA.analysis}
         await saveUserData(userState, chatId);
 
         try {
+          // Pass additional options to generate a shorter, more concise convincing message.
           const convincingMessageA = await generateConvincingMessage(
             pathAResults,
-            userState.language
+            userState.language,
+            { brevity: true }
           );
           await sendMessage(chatId, convincingMessageA);
 
@@ -500,11 +518,12 @@ ${summaryTranslationA.analysis}
       
       case STATES.PATH_B_ORIGINAL_LOAN_AMOUNT: {
         console.log('[DEBUG] PATH_B_ORIGINAL_LOAN_AMOUNT input:', message);
-        const originalLoanAmountValidation = validateLoanAmount(parseFloat(message), language);
+        const amount = parseNumericInput(message);
+        const originalLoanAmountValidation = validateLoanAmount(amount, language);
         if (!originalLoanAmountValidation.valid) {
           return await sendMessage(chatId, originalLoanAmountValidation.message);
         }
-        userState.data.originalLoanAmount = parseFloat(message);
+        userState.data.originalLoanAmount = originalLoanAmountValidation.amount || amount;
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_B_ORIGINAL_TENURE;
         await sendMessage(chatId, MESSAGES.PATH_B_ORIGINAL_TENURE[language]);
@@ -531,11 +550,12 @@ ${summaryTranslationA.analysis}
       
       case STATES.PATH_B_MONTHLY_PAYMENT: {
         console.log('[DEBUG] PATH_B_MONTHLY_PAYMENT input:', message);
-        const repaymentValidation = validateRepayment(parseFloat(message), language);
+        const repaymentAmount = parseNumericInput(message);
+        const repaymentValidation = validateRepayment(repaymentAmount, language);
         if (!repaymentValidation.valid) {
           return await sendMessage(chatId, repaymentValidation.message);
         }
-        userState.data.monthlyPayment = parseFloat(message);
+        userState.data.monthlyPayment = repaymentValidation.amount || repaymentAmount;
         await saveUserData(userState, chatId);
         userState.state = STATES.PATH_B_YEARS_PAID;
         await sendMessage(chatId, MESSAGES.PATH_B_YEARS_PAID[language]);
@@ -612,9 +632,11 @@ ${summaryTranslationB.analysis}
           await saveUserData(userState, chatId);
 
           try {
+            // Request a shorter convincing message by passing the brevity option.
             const convincingMessageB = await generateConvincingMessage(
               pathBResults,
-              userState.language
+              userState.language,
+              { brevity: true }
             );
             await sendMessage(chatId, convincingMessageB);
 
