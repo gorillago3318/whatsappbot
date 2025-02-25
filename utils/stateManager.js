@@ -297,7 +297,18 @@ async function handleState(userState, chatId, message, sendMessage, client) {
     switch (userState.state) {
       case STATES.GET_STARTED: {
         const trimmedMessage = message.trim();
-        // Attempt to capture referral code from message
+      
+        // If the user types "start", use the default referral code.
+        if (trimmedMessage.toLowerCase() === 'start') {
+          userState.data.referral_code = process.env.DEFAULT_REFERRAL_CODE || 'REF-CZ7B640D';
+          console.log('[DEBUG] User typed "start". Defaulting referral code to:', userState.data.referral_code);
+          userState.state = STATES.LANGUAGE_SELECTION;
+          await sendMessage(chatId, "Welcome to Quantify AI! 👋");
+          await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
+          break;
+        }
+      
+        // Attempt to capture a referral code from the message (e.g., "REF-XXXXXXXX")
         const extractedCode = extractReferralCodeFromMessage(trimmedMessage);
         if (!userState.data.referral_code && extractedCode) {
           userState.data.referral_code = extractedCode;
@@ -307,14 +318,18 @@ async function handleState(userState, chatId, message, sendMessage, client) {
           await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
           break;
         }
+      
+        // If no referral code is available, prompt the user.
         if (!userState.data.referral_code) {
           userState.state = STATES.REFERRAL_COLLECTION;
           await sendMessage(
             chatId,
-            "Welcome! Please enter your referral code containing 'REF-' or type 'none' to use the default referral code (REF-CZ7B640D)."
+            "Welcome! Please enter your referral code containing 'REF-' or type 'start' to use the default referral code (REF-CZ7B640D)."
           );
           break;
         }
+      
+        // If referral code already exists, move to language selection.
         userState.state = STATES.LANGUAGE_SELECTION;
         await sendMessage(chatId, "Welcome to Quantify AI! 👋");
         await sendMessage(chatId, MESSAGES.WELCOME[userState.language || 'en']);
